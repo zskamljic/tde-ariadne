@@ -22,6 +22,10 @@ struct DesktopApp {
     bool noDisplay = false;
 };
 
+// Splits a command line into arguments with the quoting rules of desktop entries' Exec lines:
+// spaces separate, double quotes group.
+QStringList splitCommandLine(const QString& line);
+
 // What opening a file does when it can be run itself.
 enum class Executable {
     No, // opened with an application

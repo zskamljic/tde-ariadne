@@ -438,6 +438,11 @@ std::expected<void, QString> Applications::launch(
     return {};
 }
 
+QStringList splitCommandLine(const QString& line)
+{
+    return splitExec(line);
+}
+
 Executable executableKind(const QString& path, const QString& mimeType)
 {
     const QFileInfo info(path);

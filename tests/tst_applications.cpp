@@ -171,7 +171,8 @@ private slots:
             const QString path = m_dir.filePath(u"run/"_s + name);
             QDir().mkpath(QFileInfo(path).absolutePath());
             QFile file(path);
-            file.open(QIODevice::WriteOnly);
+            if (!file.open(QIODevice::WriteOnly))
+                return QString();
             file.write(content);
             file.close();
             if (executable)
