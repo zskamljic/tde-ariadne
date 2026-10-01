@@ -1,5 +1,6 @@
 #include "Applications.hpp"
 
+#include "Collation.hpp"
 #include "Terminal.hpp"
 
 #include <QCollator>
@@ -267,8 +268,7 @@ QList<const DesktopApp*> Applications::visible() const
         if (!app.noDisplay)
             apps << &app;
     }
-    QCollator collator;
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    const QCollator collator = naturalCollator();
     std::ranges::sort(
         apps, [&](const DesktopApp* a, const DesktopApp* b) { return collator.compare(a->name, b->name) < 0; });
     return apps;
@@ -305,8 +305,7 @@ QList<const DesktopApp*> Applications::forMimeType(const QString& mimeType) cons
     };
 
     add(defaultFor(mimeType));
-    QCollator collator;
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    const QCollator collator = naturalCollator();
     for (const QString& type : types) {
         for (const QString& id : m_added.value(type))
             add(find(id));

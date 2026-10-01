@@ -1,6 +1,7 @@
 #include "FileSortProxy.hpp"
 
 #include "DirectoryModel.hpp"
+#include "core/Collation.hpp"
 
 namespace ariadne {
 namespace {
@@ -49,9 +50,8 @@ int naturalCompare(QStringView a, QStringView b)
 
 FileSortProxy::FileSortProxy(QObject* parent)
     : QSortFilterProxyModel(parent)
+    , m_collator(naturalCollator())
 {
-    m_collator.setNumericMode(true);
-    m_collator.setCaseSensitivity(Qt::CaseInsensitive);
     setDynamicSortFilter(true);
 }
 

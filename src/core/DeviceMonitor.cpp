@@ -1,5 +1,7 @@
 #include "DeviceMonitor.hpp"
 
+#include "Collation.hpp"
+
 #include <QCollator>
 #include <QDBusArgument>
 #include <QDBusMessage>
@@ -112,9 +114,7 @@ QString errorText(const QDBusMessage& reply)
 
 void sortByLabel(QList<Device>& devices)
 {
-    QCollator collator;
-    collator.setNumericMode(true);
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
+    const QCollator collator = naturalCollator();
     std::ranges::sort(
         devices, [&](const Device& a, const Device& b) { return collator.compare(a.label, b.label) < 0; });
 }
