@@ -1,23 +1,30 @@
 #include "Sidebar.hpp"
 
-#include "Dialog.hpp"
 #include "DragDrop.hpp"
-#include "Theme.hpp"
 #include "core/Bookmarks.hpp"
 #include "core/DeviceMonitor.hpp"
 #include "core/Location.hpp"
+
+#include <tde/Dialog.hpp>
+#include <tde/Theme.hpp>
 
 #include <QContextMenuEvent>
 #include <QDir>
 #include <QDrag>
 #include <QFileInfo>
+#include <QFutureWatcher>
+#include <QLocale>
 #include <QMenu>
 #include <QMimeData>
 #include <QPainter>
 #include <QPainterPath>
+#include <QStorageInfo>
 #include <QStyledItemDelegate>
+#include <QtConcurrentRun>
 
+#include <algorithm>
 #include <memory>
+#include <utility>
 
 using namespace Qt::StringLiterals;
 
@@ -47,7 +54,7 @@ QRect ejectRect(const QRect& itemRect)
 QIcon firstIcon(std::initializer_list<QString> names)
 {
     for (const QString& name : names) {
-        if (const QIcon icon = theme::symbolicIcon(name); !icon.isNull())
+        if (const QIcon icon = tde::theme::symbolicIcon(name); !icon.isNull())
             return icon;
     }
     return {};
@@ -64,7 +71,7 @@ public:
 
     void paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const override
     {
-        const auto& colors = theme::colors();
+        const auto& colors = tde::theme::colors();
         painter->save();
         painter->setRenderHint(QPainter::Antialiasing);
 
@@ -80,7 +87,7 @@ public:
         const bool selected = option.state & QStyle::State_Selected;
         if (selected || (option.state & QStyle::State_MouseOver)) {
             QPainterPath path;
-            path.addRoundedRect(QRectF(row), theme::radius(), theme::radius());
+            path.addRoundedRect(QRectF(row), tde::theme::radius(), tde::theme::radius());
             painter->fillPath(path, selected ? colors.accent : colors.hover);
         }
 
@@ -90,16 +97,33 @@ public:
 
         const bool ejectable = index.data(Sidebar::EjectableRole).toBool();
         QRect textRect = row.adjusted(iconRect.right() - row.left() + 12, 0, ejectable ? -36 : -8, 0);
+        // A drive's name moves up a little to make room for how full it is.
+        const QVariant usage = index.data(Sidebar::UsageRole);
+        if (usage.isValid())
+            textRect.translate(0, -3);
         painter->setPen(selected ? colors.accentText : colors.sidebarText);
         const QString text
             = option.fontMetrics.elidedText(index.data(Qt::DisplayRole).toString(), Qt::ElideRight, textRect.width());
         painter->drawText(textRect, Qt::AlignVCenter | Qt::AlignLeft, text);
 
+        if (usage.isValid()) {
+            const double used = std::clamp(usage.toDouble(), 0.0, 1.0);
+            const QRectF track(textRect.left(), row.bottom() - 7, textRect.width(), 3);
+            QColor trackColor = selected ? colors.accentText : colors.sidebarText;
+            trackColor.setAlphaF(0.2f);
+            const QColor fill = selected ? colors.accentText : used >= 0.9 ? colors.error : colors.accent;
+            painter->setPen(Qt::NoPen);
+            painter->setBrush(trackColor);
+            painter->drawRoundedRect(track, 1.5, 1.5);
+            painter->setBrush(fill);
+            painter->drawRoundedRect(QRectF(track.topLeft(), QSizeF(track.width() * used, track.height())), 1.5, 1.5);
+        }
+
         if (ejectable) {
             const QRect button = ejectRect(option.rect);
             QRect ejectIcon(0, 0, 16, 16);
             ejectIcon.moveCenter(button.center());
-            theme::symbolicIcon(u"media-eject"_s)
+            tde::theme::symbolicIcon(u"media-eject"_s)
                 .paint(painter, ejectIcon, Qt::AlignCenter, selected ? QIcon::Selected : QIcon::Normal);
         }
         painter->restore();
@@ -130,6 +154,10 @@ Sidebar::Sidebar(Bookmarks& bookmarks, DeviceMonitor& devices, QWidget* parent)
     setSpacing(0);
     setContentsMargins(0, 6, 0, 6);
 
+    m_usageTimer.setInterval(60'000);
+    connect(&m_usageTimer, &QTimer::timeout, this, &Sidebar::measureUsage);
+    m_usageTimer.start();
+
     watchTrash();
     connect(&m_bookmarks, &Bookmarks::changed, this, &Sidebar::rebuild);
     connect(&m_devices, &DeviceMonitor::changed, this, &Sidebar::rebuild);
@@ -159,12 +187,27 @@ void Sidebar::setCurrentLocation(const QUrl& url)
 {
     m_current = url;
     const QSignalBlocker blocker(this);
+    // A place can be in the sidebar twice, as a drive and as a bookmark: the row picked stays
+    // picked, and after the list is rebuilt, a row of the kind picked last is preferred.
+    const auto matches = [&](const QListWidgetItem* candidate) {
+        return candidate && kindOf(candidate) != Kind::Separator && candidate->data(UrlRole).toUrl() == url;
+    };
+    if (matches(currentItem())) {
+        m_currentKind = kindOf(currentItem());
+        return;
+    }
+    QListWidgetItem* found = nullptr;
     for (int row = 0; row < count(); ++row) {
         QListWidgetItem* candidate = item(row);
-        if (kindOf(candidate) != Kind::Separator && candidate->data(UrlRole).toUrl() == url) {
-            setCurrentItem(candidate);
-            return;
-        }
+        if (!matches(candidate))
+            continue;
+        if (!found || (kindOf(candidate) == m_currentKind && kindOf(found) != m_currentKind))
+            found = candidate;
+    }
+    if (found) {
+        setCurrentItem(found);
+        m_currentKind = kindOf(found);
+        return;
     }
     clearSelection();
     setCurrentItem(nullptr);
@@ -212,7 +255,63 @@ void Sidebar::rebuild()
         }
     }
 
+    showUsage();
+    measureUsage();
     setCurrentLocation(m_current);
+}
+
+void Sidebar::measureUsage()
+{
+    if (m_measuring) {
+        m_measureAgain = true; // drives came or went meanwhile
+        return;
+    }
+    // Drives only: phones and network shares are slow to ask, and seldom answer truly.
+    QStringList mountPoints {u"/"_s};
+    for (const Device& device : m_devices.devices()) {
+        if (!device.mountPoint.isEmpty() && device.uri.isEmpty())
+            mountPoints << device.mountPoint;
+    }
+    m_measuring = true;
+    auto* watcher = new QFutureWatcher<QHash<QString, StorageUsage>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher] {
+        watcher->deleteLater();
+        m_measuring = false;
+        m_usage = watcher->result();
+        showUsage();
+        if (std::exchange(m_measureAgain, false))
+            measureUsage();
+    });
+    // A hung mount can block for long; never on this thread.
+    watcher->setFuture(QtConcurrent::run([mountPoints] {
+        QHash<QString, StorageUsage> usage;
+        for (const QString& path : mountPoints) {
+            const QStorageInfo storage(path);
+            if (storage.isValid() && storage.isReady() && storage.bytesTotal() > 0)
+                usage.insert(path, {storage.bytesTotal(), storage.bytesAvailable()});
+        }
+        return usage;
+    }));
+}
+
+void Sidebar::showUsage()
+{
+    const QLocale locale;
+    for (int row = 0; row < count(); ++row) {
+        QListWidgetItem* entry = item(row);
+        const QUrl url = entry->data(UrlRole).toUrl();
+        if (kindOf(entry) != Kind::Device || !url.isLocalFile())
+            continue;
+        const auto it = m_usage.constFind(url.toLocalFile());
+        if (it == m_usage.cend())
+            continue;
+        const double used = 1.0 - double(it->available) / double(it->total);
+        entry->setData(UsageRole, used);
+        const QString space
+            = u"%1 free of %2"_s.arg(locale.formattedDataSize(it->available, 1, QLocale::DataSizeSIFormat),
+                locale.formattedDataSize(it->total, 1, QLocale::DataSizeSIFormat));
+        entry->setToolTip(u"%1\n%2"_s.arg(url.toLocalFile(), space));
+    }
 }
 
 QListWidgetItem* Sidebar::addEntry(Kind kind, const QString& label, const QString& iconName, const QUrl& url)
@@ -238,6 +337,9 @@ void Sidebar::activate(QListWidgetItem* item, bool newWindow)
 {
     if (!item || kindOf(item) == Kind::Separator)
         return;
+    // Which row was picked, should another one lead to the same place.
+    if (!newWindow)
+        m_currentKind = kindOf(item);
 
     const QUrl url = item->data(UrlRole).toUrl();
     if (url.isEmpty()) {
@@ -312,7 +414,7 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
     if (kindOf(item) == Kind::Bookmark) {
         menu.addSeparator();
         menu.addAction(u"Rename…"_s, this, [this, url, name = item->text()] {
-            if (const auto label = Dialog::getText(this, u"Rename Bookmark"_s, u"Name"_s, name, u"Rename"_s))
+            if (const auto label = tde::Dialog::getText(this, u"Rename Bookmark"_s, u"Name"_s, name, u"Rename"_s))
                 m_bookmarks.rename(url, *label);
         });
         menu.addAction(u"Remove from Bookmarks"_s, this, [this, url] { m_bookmarks.remove(url); });
@@ -499,12 +601,12 @@ void Sidebar::paintEvent(QPaintEvent* event)
     QListWidget::paintEvent(event);
     QPainter painter(viewport());
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(theme::colors().accent, 2));
+    painter.setPen(QPen(tde::theme::colors().accent, 2));
     if (m_dropIndicatorY >= 0)
         painter.drawLine(12, m_dropIndicatorY, viewport()->width() - 12, m_dropIndicatorY);
     if (m_dropRow >= 0) {
         const QRectF rect = QRectF(visualItemRect(item(m_dropRow))).adjusted(7, 2, -7, -2);
-        painter.drawRoundedRect(rect, theme::radius(), theme::radius());
+        painter.drawRoundedRect(rect, tde::theme::radius(), tde::theme::radius());
     }
 }
 

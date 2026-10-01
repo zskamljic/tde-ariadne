@@ -1,7 +1,9 @@
 #pragma once
 
 #include <QFileSystemWatcher>
+#include <QHash>
 #include <QListWidget>
+#include <QTimer>
 #include <QUrl>
 
 namespace ariadne {
@@ -16,7 +18,7 @@ class Sidebar : public QListWidget {
 
 public:
     enum class Kind { Place, Bookmark, Device, Separator };
-    enum Role { KindRole = Qt::UserRole + 1, UrlRole, DeviceRole, BookmarkIndexRole, EjectableRole };
+    enum Role { KindRole = Qt::UserRole + 1, UrlRole, DeviceRole, BookmarkIndexRole, EjectableRole, UsageRole };
 
     Sidebar(Bookmarks& bookmarks, DeviceMonitor& devices, QWidget* parent = nullptr);
 
@@ -50,6 +52,8 @@ private:
     };
 
     void rebuild();
+    void measureUsage();
+    void showUsage();
     void watchTrash();
     QListWidgetItem* addEntry(Kind kind, const QString& label, const QString& iconName, const QUrl& url);
     void addSeparator();
@@ -72,7 +76,17 @@ private:
     Bookmarks& m_bookmarks;
     DeviceMonitor& m_devices;
     QFileSystemWatcher m_trashWatcher;
+    struct StorageUsage {
+        qint64 total = 0;
+        qint64 available = 0;
+    };
+    // How full each mounted drive is, by mount point.
+    QHash<QString, StorageUsage> m_usage;
+    QTimer m_usageTimer;
+    bool m_measuring = false;
+    bool m_measureAgain = false;
     QUrl m_current;
+    Kind m_currentKind = Kind::Place;
     QListWidgetItem* m_pressedItem = nullptr;
     qsizetype m_draggedBookmark = -1;
     int m_dropIndicatorY = -1;
