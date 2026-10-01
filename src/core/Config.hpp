@@ -1,11 +1,14 @@
 #pragma once
 
+#include "CustomActions.hpp"
+
 #include <QHash>
 #include <QString>
 #include <QStringList>
 
 #include <expected>
 #include <optional>
+#include <vector>
 
 namespace ariadne {
 
@@ -33,6 +36,8 @@ struct Config {
         bool showHidden = false;
         int gridIconSize = 64;
         int listIconSize = 24;
+        bool expandableFolders = true; // in the list view; from the config file only
+        bool archivesAsFolders = true; // opening an archive shows what is in it; config file only
 
         bool operator==(const View&) const = default;
     };
@@ -41,6 +46,8 @@ struct Config {
     View view;
     // MIME type → icon name, replacing the icon theme's choice. Not remembered in the state.
     QHash<QString, QString> icons;
+    // The user's own commands in the context menu. Not remembered in the state.
+    std::vector<CustomAction> actions;
 
     bool operator==(const Config&) const = default;
 };

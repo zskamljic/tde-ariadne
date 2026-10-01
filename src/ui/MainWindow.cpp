@@ -2,31 +2,34 @@
 
 #include "Application.hpp"
 #include "BatchRenameDialog.hpp"
-#include "Dialog.hpp"
+#include "Dialogs.hpp"
 #include "DirectoryModel.hpp"
 #include "FileManagerService.hpp"
 #include "FileSortProxy.hpp"
 #include "FileView.hpp"
-#include "FramelessHelper.hpp"
-#include "HeaderBar.hpp"
 #include "Jobs.hpp"
 #include "JobsButton.hpp"
 #include "OpenWithDialog.hpp"
 #include "PathBar.hpp"
 #include "PropertiesDialog.hpp"
 #include "Sidebar.hpp"
-#include "Theme.hpp"
-#include "Toast.hpp"
-#include "WindowButtons.hpp"
 #include "core/Applications.hpp"
 #include "core/Archives.hpp"
 #include "core/ClipboardFormat.hpp"
+#include "core/CustomActions.hpp"
 #include "core/DefaultFileManager.hpp"
 #include "core/DeviceMonitor.hpp"
 #include "core/FileOperations.hpp"
 #include "core/Location.hpp"
 #include "core/Terminal.hpp"
-#include "tde/DesktopConfig.hpp"
+
+#include <tde/DesktopConfig.hpp>
+#include <tde/Dialog.hpp>
+#include <tde/FramelessHelper.hpp>
+#include <tde/HeaderBar.hpp>
+#include <tde/Theme.hpp>
+#include <tde/Toast.hpp>
+#include <tde/WindowButtons.hpp>
 
 #include <QAction>
 #include <QActionGroup>
@@ -42,6 +45,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
+#include <QMap>
 #include <QMenu>
 #include <QMimeDatabase>
 #include <QMouseEvent>
@@ -55,6 +59,9 @@
 #include <QWindow>
 #include <QtConcurrentRun>
 #include <QtMath>
+
+#include <cstdio>
+#include <print>
 
 using namespace Qt::StringLiterals;
 
@@ -101,7 +108,7 @@ MainWindow::MainWindow(Application& app, const QUrl& location, const QString& se
     setObjectName(u"MainWindow"_s);
     setAttribute(Qt::WA_StyledBackground);
     setMinimumSize(560, 360);
-    new FramelessHelper(this);
+    new tde::FramelessHelper(this);
 
     const Config::View& view = m_app.config().view;
     m_proxy->setDirectoryModel(m_model);
@@ -109,6 +116,7 @@ MainWindow::MainWindow(Application& app, const QUrl& location, const QString& se
     m_proxy->setFoldersFirst(view.foldersFirst);
     m_proxy->setCaseSensitive(view.caseSensitive);
     m_proxy->setShowHidden(view.showHidden);
+    m_model->setExpandableFolders(view.expandableFolders);
 
     createActions();
 
@@ -152,7 +160,48 @@ MainWindow::MainWindow(Application& app, const QUrl& location, const QString& se
     });
 
     m_view->setIconSizes(view.gridIconSize, view.listIconSize);
+    m_view->setExpandableFolders(view.expandableFolders);
+    placeWindowButtons();
+    setupCustomShortcuts();
     setLocation(location); // also applies the folder's view settings
+}
+
+void MainWindow::placeWindowButtons()
+{
+    const auto& buttons = tde::desktop().windowButtons;
+    for (QWidget* slot : {m_leftButtonSlot, m_rightButtonSlot}) {
+        for (auto* old : slot->findChildren<tde::WindowButtons*>(Qt::FindDirectChildrenOnly)) {
+            old->hide();
+            old->deleteLater();
+        }
+    }
+    QWidget* slot = buttons.side == tde::ButtonSide::Left ? m_leftButtonSlot : m_rightButtonSlot;
+    slot->layout()->addWidget(new tde::WindowButtons(buttons.order, slot));
+    m_leftButtonSlot->setVisible(slot == m_leftButtonSlot);
+    m_rightButtonSlot->setVisible(slot == m_rightButtonSlot);
+}
+
+void MainWindow::applyDesktopConfig()
+{
+    // Colours, corners and icons follow the theme by themselves; the buttons are laid out anew.
+    placeWindowButtons();
+    update();
+}
+
+void MainWindow::applyConfig(const Config& config)
+{
+    // Through the actions, as if chosen in the menus.
+    m_showHiddenAction->setChecked(config.view.showHidden);
+    m_foldersFirstAction->setChecked(config.view.foldersFirst);
+    m_caseSensitiveAction->setChecked(config.view.caseSensitive);
+    m_model->setIconOverrides(config.icons);
+    m_view->setIconSizes(config.view.gridIconSize, config.view.listIconSize);
+    m_model->setExpandableFolders(config.view.expandableFolders);
+    m_view->setExpandableFolders(config.view.expandableFolders);
+    setupCustomShortcuts();
+    // Folders shown the default way take the new default.
+    if (!m_model->isSearching() && m_model->searchQuery().isEmpty())
+        applyFolderView(m_app.folderView(m_location));
 }
 
 void MainWindow::createActions()
@@ -272,12 +321,12 @@ QWidget* MainWindow::createSidebarColumn()
     column->setAttribute(Qt::WA_StyledBackground);
     column->setMinimumWidth(160);
 
-    auto* header = new HeaderBar(column);
-    const auto& buttons = tde::desktop().windowButtons;
-    if (buttons.side == tde::ButtonSide::Left)
-        header->contentLayout()->addWidget(new WindowButtons(buttons.order, header));
+    auto* header = new tde::HeaderBar(column);
+    m_leftButtonSlot = new QWidget(header);
+    (new QHBoxLayout(m_leftButtonSlot))->setContentsMargins(0, 0, 0, 0);
+    header->contentLayout()->addWidget(m_leftButtonSlot);
     header->contentLayout()->addStretch(1);
-    QToolButton* menuButton = HeaderBar::makeButton(u"open-menu"_s, u"Main Menu"_s, header);
+    QToolButton* menuButton = tde::HeaderBar::makeButton(u"open-menu"_s, u"Main Menu"_s, header);
     menuButton->setMenu(createAppMenu());
     menuButton->setPopupMode(QToolButton::InstantPopup);
     header->contentLayout()->addWidget(menuButton);
@@ -306,15 +355,15 @@ QWidget* MainWindow::createContentColumn()
     column->setObjectName(u"ContentColumn"_s);
     column->setAttribute(Qt::WA_StyledBackground);
 
-    auto* header = new HeaderBar(column);
+    auto* header = new tde::HeaderBar(column);
     QHBoxLayout* headerLayout = header->contentLayout();
 
     // A default action overrides the button's icon, so the icons live on the actions.
-    m_backAction->setIcon(theme::symbolicIcon(u"go-previous"_s));
-    m_forwardAction->setIcon(theme::symbolicIcon(u"go-next"_s));
-    QToolButton* backButton = HeaderBar::makeButton({}, {}, header);
+    m_backAction->setIcon(tde::theme::symbolicIcon(u"go-previous"_s));
+    m_forwardAction->setIcon(tde::theme::symbolicIcon(u"go-next"_s));
+    QToolButton* backButton = tde::HeaderBar::makeButton({}, {}, header);
     backButton->setDefaultAction(m_backAction);
-    QToolButton* forwardButton = HeaderBar::makeButton({}, {}, header);
+    QToolButton* forwardButton = tde::HeaderBar::makeButton({}, {}, header);
     forwardButton->setDefaultAction(m_forwardAction);
     headerLayout->addWidget(backButton);
     headerLayout->addWidget(forwardButton);
@@ -323,7 +372,7 @@ QWidget* MainWindow::createContentColumn()
     m_searchEntry = new QLineEdit(header);
     m_searchEntry->setObjectName(u"SearchEntry"_s);
     m_searchEntry->setClearButtonEnabled(true);
-    m_searchEntry->addAction(theme::symbolicIcon(u"edit-find"_s), QLineEdit::LeadingPosition);
+    m_searchEntry->addAction(tde::theme::symbolicIcon(u"edit-find"_s), QLineEdit::LeadingPosition);
     m_searchEntry->installEventFilter(this);
     m_locationStack = new QStackedWidget(header);
     m_locationStack->addWidget(m_pathBar);
@@ -335,15 +384,15 @@ QWidget* MainWindow::createContentColumn()
     m_searchTimer.setInterval(200);
     connect(m_searchEntry, &QLineEdit::textEdited, this, [this] { m_searchTimer.start(); });
     connect(&m_searchTimer, &QTimer::timeout, this, &MainWindow::runSearch);
-    QToolButton* searchButton = HeaderBar::makeButton({}, {}, header);
-    m_searchAction->setIcon(theme::symbolicIcon(u"edit-find"_s));
+    QToolButton* searchButton = tde::HeaderBar::makeButton({}, {}, header);
+    m_searchAction->setIcon(tde::theme::symbolicIcon(u"edit-find"_s));
     m_searchAction->setToolTip(u"Search (Ctrl+F)"_s);
     searchButton->setDefaultAction(m_searchAction);
     connect(m_pathBar, &PathBar::locationClicked, this, &MainWindow::navigate);
     connect(m_pathBar, &PathBar::pathEntered, this, &MainWindow::onPathEntered);
     connect(m_pathBar, &PathBar::editingCancelled, this, [this] { m_view->focusView(); });
 
-    m_viewButton = HeaderBar::makeButton(u"view-list"_s, {}, header);
+    m_viewButton = tde::HeaderBar::makeButton(u"view-list"_s, {}, header);
     m_viewButton->setPopupMode(QToolButton::MenuButtonPopup);
     m_viewButton->setMenu(createViewMenu());
     connect(m_viewButton, &QToolButton::clicked, this,
@@ -352,18 +401,19 @@ QWidget* MainWindow::createContentColumn()
     headerLayout->addWidget(new JobsButton(m_app.jobs(), header));
     headerLayout->addWidget(m_viewButton);
 
-    const auto& buttons = tde::desktop().windowButtons;
-    if (buttons.side == tde::ButtonSide::Right) {
-        headerLayout->addSpacing(6);
-        headerLayout->addWidget(new WindowButtons(buttons.order, header));
-    }
+    m_rightButtonSlot = new QWidget(header);
+    (new QHBoxLayout(m_rightButtonSlot))->setContentsMargins(6, 0, 0, 0);
+    headerLayout->addWidget(m_rightButtonSlot);
 
     m_view = new FileView(m_proxy, column);
-    m_toast = new Toast(m_view);
+    m_toast = new tde::Toast(m_view);
     connect(m_view, &FileView::activated, this, &MainWindow::activate);
     connect(m_view, &FileView::middleClicked, this, [this](const QModelIndex& index) {
         const FileEntry entry = entryAt(index);
-        entry.isDir ? static_cast<void>(m_app.openWindow(entry.url)) : openFile(entry);
+        if (const auto folder = folderOf(entry))
+            m_app.openWindow(*folder);
+        else
+            openFile(entry);
     });
     connect(m_view, &FileView::contextMenuRequested, this, &MainWindow::showContextMenu);
     connect(m_view, &FileView::headerClicked, this, &MainWindow::onHeaderClicked);
@@ -408,11 +458,29 @@ QWidget* MainWindow::createContentColumn()
     connect(m_emptyTrashButton, &QPushButton::clicked, this, &MainWindow::emptyTrash);
     m_trashBar->hide();
 
+    // Inside an archive: say so, and offer to unpack it.
+    m_archiveBar = new QWidget(column);
+    m_archiveBar->setObjectName(u"InfoBar"_s);
+    m_archiveBar->setAttribute(Qt::WA_StyledBackground);
+    auto* archiveLayout = new QHBoxLayout(m_archiveBar);
+    archiveLayout->setContentsMargins(12, 6, 8, 6);
+    m_archiveLabel = new QLabel(m_archiveBar);
+    m_archiveLabel->setObjectName(u"AboutDetails"_s);
+    auto* extractAll = new QPushButton(u"Extract All…"_s, m_archiveBar);
+    archiveLayout->addWidget(m_archiveLabel, 1);
+    archiveLayout->addWidget(extractAll);
+    connect(extractAll, &QPushButton::clicked, this, [this] {
+        if (const auto place = location::archivePlace(m_location))
+            extractArchives({place->file}, true);
+    });
+    m_archiveBar->hide();
+
     auto* layout = new QVBoxLayout(column);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
     layout->addWidget(header);
     layout->addWidget(m_trashBar);
+    layout->addWidget(m_archiveBar);
     layout->addWidget(m_view);
     return column;
 }
@@ -432,7 +500,8 @@ QMenu* MainWindow::createAppMenu()
         menu->addAction(u"Connect to Server…"_s, this, &MainWindow::connectToServer);
     if (!defaults::status().complete())
         menu->addAction(u"Make Default File Manager…"_s, this, &MainWindow::makeDefault);
-    menu->addAction(u"About Ariadne"_s, this, [this] { Dialog::showAbout(this); });
+    menu->addAction(u"About Ariadne"_s, this,
+        [this] { tde::Dialog::showAbout(this, u"Ariadne"_s, u"A file manager, part of TDE."_s); });
     menu->addAction(m_quitAction);
     return menu;
 }
@@ -581,7 +650,7 @@ void MainWindow::setViewMode(ViewMode mode, bool remember)
     m_view->setMode(mode);
     (mode == ViewMode::Grid ? m_gridAction : m_listAction)->setChecked(true);
     const bool grid = mode == ViewMode::Grid;
-    m_viewButton->setIcon(theme::symbolicIcon(grid ? u"view-list"_s : u"view-grid"_s));
+    m_viewButton->setIcon(tde::theme::symbolicIcon(grid ? u"view-list"_s : u"view-grid"_s));
     m_viewButton->setToolTip(grid ? u"Switch to List View"_s : u"Switch to Grid View"_s);
     if (remember)
         rememberFolderView();
@@ -661,7 +730,7 @@ void MainWindow::onPathEntered(const QString& text)
 
 FileEntry MainWindow::entryAt(const QModelIndex& proxyIndex) const
 {
-    return m_model->entry(m_proxy->mapToSource(proxyIndex).row());
+    return m_model->entry(m_proxy->mapToSource(proxyIndex));
 }
 
 std::vector<FileEntry> MainWindow::selectedEntries() const
@@ -680,29 +749,55 @@ void MainWindow::activate(const QModelIndex& index)
         entries = {clicked};
 
     if (entries.size() == 1) {
-        clicked.isDir ? navigate(clicked.url) : openFile(clicked);
+        if (const auto folder = folderOf(clicked))
+            navigate(*folder);
+        else
+            openFile(clicked);
         return;
     }
-    for (const FileEntry& entry : entries)
-        entry.isDir ? static_cast<void>(m_app.openWindow(entry.url)) : openFile(entry);
+    for (const FileEntry& entry : entries) {
+        if (const auto folder = folderOf(entry))
+            m_app.openWindow(*folder);
+        else
+            openFile(entry);
+    }
+}
+
+std::optional<QUrl> MainWindow::folderOf(const FileEntry& entry) const
+{
+    if (entry.isDir)
+        return entry.url;
+    // Archives open like folders, unless that is turned off; ones inside archives cannot.
+    if (m_app.config().view.archivesAsFolders && location::isLocal(entry.url) && archives::isArchive(entry.mimeType))
+        return location::archiveRoot(entry.path);
+    return std::nullopt;
 }
 
 void MainWindow::openFile(const FileEntry& entry)
 {
+    // A copy, unpacked for the purpose; the archive stays as it is.
+    if (location::isArchive(entry.url)) {
+        extractCopies({entry}, [this](const QStringList& paths) {
+            const QMimeDatabase mimeDatabase;
+            for (const QString& path : paths)
+                openInApplication(describeEntry(QFileInfo(path), location::fromLocalPath(path), false, mimeDatabase));
+        });
+        return;
+    }
     // Programs run; scripts can be run or edited, so they ask. Nothing runs from the trash.
     const Executable kind = location::isTrash(m_location) ? Executable::No : executableKind(entry.path, entry.mimeType);
     bool run = kind == Executable::Program;
     bool inTerminal = false;
     if (kind == Executable::Script) {
-        switch (Dialog::askScriptAction(this, entry.name)) {
-        case Dialog::ScriptAction::Cancel:
+        switch (dialogs::askScriptAction(this, entry.name)) {
+        case dialogs::ScriptAction::Cancel:
             return;
-        case Dialog::ScriptAction::Open:
+        case dialogs::ScriptAction::Open:
             break;
-        case Dialog::ScriptAction::RunInTerminal:
+        case dialogs::ScriptAction::RunInTerminal:
             inTerminal = true;
             [[fallthrough]];
-        case Dialog::ScriptAction::Run:
+        case dialogs::ScriptAction::Run:
             run = true;
             break;
         }
@@ -731,9 +826,133 @@ void MainWindow::openInApplication(const FileEntry& entry)
         m_toast->showMessage(u"There is no application for opening “%1”."_s.arg(entry.name));
 }
 
+namespace {
+
+std::vector<ActionTarget> targetsOf(const std::vector<FileEntry>& entries)
+{
+    std::vector<ActionTarget> targets;
+    for (const FileEntry& entry : entries)
+        targets.push_back({entry.path, entry.mimeType});
+    return targets;
+}
+
+QIcon actionIcon(const QString& icon)
+{
+    if (icon.isEmpty())
+        return {};
+    return QFileInfo(icon).isAbsolute() ? QIcon(icon) : tde::theme::themeIcon({icon});
+}
+
+} // namespace
+
+void MainWindow::addCustomActions(QMenu& menu, const std::vector<FileEntry>& entries)
+{
+    const std::vector<ActionTarget> targets = targetsOf(entries);
+    const QMimeDatabase mimes;
+    bool first = true;
+    for (const CustomAction& action : m_app.config().actions) {
+        if (!appliesTo(action, targets, mimes))
+            continue;
+        if (std::exchange(first, false))
+            menu.addSeparator();
+        QAction* item = menu.addAction(
+            actionIcon(action.icon), action.name, this, [this, action, targets] { runCustomAction(action, targets); });
+        // Shown as a hint; pressing it is handled by the window's own action.
+        item->setShortcut(QKeySequence(action.shortcut));
+        item->setShortcutContext(Qt::WidgetShortcut);
+    }
+}
+
+void MainWindow::runCustomAction(const CustomAction& action, const std::vector<ActionTarget>& targets)
+{
+    const QString folder = location::localPath(m_location);
+    if (const auto started = runAction(action, targets, folder, tde::desktop().terminal); !started)
+        m_toast->showMessage(started.error());
+}
+
+void MainWindow::setupCustomShortcuts()
+{
+    for (QAction* old : std::exchange(m_customShortcuts, {})) {
+        removeAction(old);
+        old->deleteLater();
+    }
+    for (const CustomAction& action : m_app.config().actions) {
+        if (action.shortcut.isEmpty())
+            continue;
+        const QKeySequence keys(action.shortcut);
+        if (keys.isEmpty()) {
+            std::println(stderr, "ariadne: unknown shortcut \"{}\" for \"{}\"", action.shortcut.toStdString(),
+                action.name.toStdString());
+            continue;
+        }
+        QAction* shortcut = makeAction(this, action.name, {keys});
+        connect(shortcut, &QAction::triggered, this, [this, action] {
+            if (!location::isLocal(m_location) || location::isTrash(m_location))
+                return;
+            const std::vector<ActionTarget> targets = targetsOf(selectedEntries());
+            if (appliesTo(action, targets, QMimeDatabase()))
+                runCustomAction(action, targets);
+            else
+                m_toast->showMessage(u"“%1” does not apply to what is selected."_s.arg(action.name));
+        });
+        m_customShortcuts.push_back(shortcut);
+    }
+}
+
+void MainWindow::fillArchiveMenu(QMenu& menu, const QModelIndex& index)
+{
+    // Only what reads: opening copies, copying out, unpacking.
+    if (index.isValid()) {
+        const std::vector<FileEntry> entries = selectedEntries();
+        menu.addAction(u"Open"_s, this, [this, index] { activate(index); });
+        if (std::ranges::none_of(entries, &FileEntry::isDir)) {
+            QMenu* openWithMenu = menu.addMenu(u"Open With"_s);
+            const Applications applications = Applications::load();
+            for (const DesktopApp* app : applications.forMimeType(entries.front().mimeType)) {
+                openWithMenu->addAction(tde::theme::themeIcon({app->iconName, u"application-x-executable"_s}),
+                    app->name, this, [this, entries, id = app->id] { openWith(entries, id); });
+            }
+            openWithMenu->setEnabled(!openWithMenu->isEmpty());
+        }
+        menu.addSeparator();
+        menu.addAction(m_copyAction);
+        menu.addAction(u"Extract To…"_s, this, [this, entries] { extractFromArchive(entries); });
+        return;
+    }
+    menu.addAction(u"Extract All…"_s, this, [this] {
+        if (const auto place = location::archivePlace(m_location))
+            extractArchives({place->file}, true);
+    });
+    if (const auto place = location::archivePlace(m_location)) {
+        const QString file = place->file;
+        QMenu* openWithMenu = menu.addMenu(u"Open Archive With"_s);
+        const QString mimeType = QMimeDatabase().mimeTypeForFile(file).name();
+        const Applications applications = Applications::load();
+        for (const DesktopApp* app : applications.forMimeType(mimeType)) {
+            openWithMenu->addAction(tde::theme::themeIcon({app->iconName, u"application-x-executable"_s}), app->name,
+                this, [this, file, id = app->id] {
+                    const Applications apps = Applications::load();
+                    if (const DesktopApp* chosen = apps.find(id))
+                        if (const auto launched = Applications::launch(*chosen, {file}, tde::desktop().terminal);
+                            !launched)
+                            m_toast->showMessage(launched.error());
+                });
+        }
+        openWithMenu->setEnabled(!openWithMenu->isEmpty());
+    }
+    menu.addSeparator();
+    menu.addAction(m_showHiddenAction);
+    menu.addAction(m_reloadAction);
+}
+
 void MainWindow::showContextMenu(const QPoint& globalPosition, const QModelIndex& index)
 {
     QMenu menu(this);
+    if (location::isArchive(m_location)) {
+        fillArchiveMenu(menu, index);
+        menu.exec(globalPosition);
+        return;
+    }
 
     if (index.isValid()) {
         const std::vector<FileEntry> entries = selectedEntries();
@@ -758,8 +977,8 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const QModelIndex
             QMenu* openWithMenu = menu.addMenu(u"Open With"_s);
             const Applications applications = Applications::load();
             for (const DesktopApp* app : applications.forMimeType(entries.front().mimeType)) {
-                openWithMenu->addAction(theme::themeIcon({app->iconName, u"application-x-executable"_s}), app->name,
-                    this, [this, entries, id = app->id] { openWith(entries, id); });
+                openWithMenu->addAction(tde::theme::themeIcon({app->iconName, u"application-x-executable"_s}),
+                    app->name, this, [this, entries, id = app->id] { openWith(entries, id); });
             }
             if (!openWithMenu->isEmpty())
                 openWithMenu->addSeparator();
@@ -782,6 +1001,9 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const QModelIndex
             menu.addAction(u"Extract Here"_s, this, [this] { extractSelection(false); });
             menu.addAction(u"Extract to…"_s, this, [this] { extractSelection(true); });
         }
+
+        if (!inTrash)
+            addCustomActions(menu, entries);
 
         menu.addSeparator();
         if (inTrash) {
@@ -817,7 +1039,7 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const QModelIndex
         menu.addAction(m_newFolderAction);
         QMenu* documents = menu.addMenu(u"New Document"_s);
         documents->setEnabled(canCreateHere());
-        documents->addAction(theme::themeIcon({u"text-x-generic"_s}), u"Empty Document"_s, this,
+        documents->addAction(tde::theme::themeIcon({u"text-x-generic"_s}), u"Empty Document"_s, this,
             [this] { createItem(NewItem::EmptyDocument); });
         const QList<QFileInfo> templates = documentTemplates();
         if (!templates.isEmpty())
@@ -825,12 +1047,15 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const QModelIndex
         const QMimeDatabase mimeDatabase;
         for (const QFileInfo& file : templates) {
             const QMimeType mime = mimeDatabase.mimeTypeForFile(file);
-            documents->addAction(theme::themeIcon({mime.iconName(), mime.genericIconName()}), file.completeBaseName(),
-                this, [this, path = file.absoluteFilePath()] { createItem(NewItem::FromTemplate, path); });
+            documents->addAction(tde::theme::themeIcon({mime.iconName(), mime.genericIconName()}),
+                file.completeBaseName(), this,
+                [this, path = file.absoluteFilePath()] { createItem(NewItem::FromTemplate, path); });
         }
         menu.addSeparator();
         if (location::isLocal(m_location))
             menu.addAction(u"Open in Terminal"_s, this, [this] { openTerminal(location::localPath(m_location)); });
+        if (location::isLocal(m_location) && !location::isTrash(m_location))
+            addCustomActions(menu, {});
         menu.addAction(m_bookmarkAction);
         menu.addAction(m_newWindowAction);
         menu.addSeparator();
@@ -856,8 +1081,20 @@ void MainWindow::showContextMenu(const QPoint& globalPosition, const QModelIndex
     menu.exec(globalPosition);
 }
 
+bool MainWindow::refuseInArchive()
+{
+    const auto place = location::archivePlace(m_location);
+    if (!place)
+        return false;
+    m_toast->showMessage(
+        u"“%1” can only be read here; extract it to change what is in it."_s.arg(QFileInfo(place->file).fileName()));
+    return true;
+}
+
 void MainWindow::trashSelection()
 {
+    if (refuseInArchive())
+        return;
     // Things in the trash can only be deleted for good.
     if (location::isTrash(m_location)) {
         deleteSelection();
@@ -891,12 +1128,14 @@ void MainWindow::trashPaths(const QStringList& paths)
 
 void MainWindow::deleteSelection()
 {
+    if (refuseInArchive())
+        return;
     const std::vector<FileEntry> entries = selectedEntries();
     if (entries.empty())
         return;
     const QString what
         = entries.size() == 1 ? u"“%1”"_s.arg(entries.front().name) : u"%1 selected items"_s.arg(entries.size());
-    if (!Dialog::confirm(this, u"Delete Permanently"_s, u"Permanently delete %1?"_s.arg(what),
+    if (!tde::Dialog::confirm(this, u"Delete Permanently"_s, u"Permanently delete %1?"_s.arg(what),
             u"Deleted items cannot be restored."_s, u"Delete"_s))
         return;
     const QString done = entries.size() == 1 ? u"“%1” deleted."_s.arg(entries.front().name)
@@ -947,7 +1186,7 @@ void MainWindow::restoreSelection()
 
 void MainWindow::emptyTrash()
 {
-    if (!Dialog::confirm(this, u"Empty Trash"_s, u"Permanently delete everything in the Trash?"_s,
+    if (!tde::Dialog::confirm(this, u"Empty Trash"_s, u"Permanently delete everything in the Trash?"_s,
             u"The items cannot be restored afterwards."_s, u"Empty Trash"_s))
         return;
     runFileOperation([] { return fileops::emptyTrash(); }, u"The Trash is empty."_s, u"delete"_s);
@@ -961,6 +1200,11 @@ void MainWindow::openTerminal(const QString& directory)
 
 void MainWindow::openSearch(const QString& text)
 {
+    if (location::isArchive(m_location)) {
+        m_searchAction->setChecked(false);
+        m_toast->showMessage(u"Archives cannot be searched."_s);
+        return;
+    }
     m_locationStack->setCurrentWidget(m_searchEntry);
     m_searchAction->setChecked(true);
     m_searchEntry->setPlaceholderText(u"Search in “%1” and its folders"_s.arg(location::displayName(m_location)));
@@ -1001,6 +1245,8 @@ void MainWindow::runSearch()
 
 void MainWindow::renameSelection()
 {
+    if (refuseInArchive())
+        return;
     const std::vector<FileEntry> entries = selectedEntries();
     if (entries.empty() || location::isTrash(m_location))
         return;
@@ -1081,27 +1327,70 @@ void MainWindow::extractSelection(bool askForDestination)
     const std::vector<FileEntry> entries = selectedEntries();
     if (entries.empty())
         return;
+    // Inside an archive: what is selected, out of it.
+    if (location::isArchive(m_location)) {
+        extractFromArchive(entries);
+        return;
+    }
+    extractArchives(pathsOf(entries), askForDestination);
+}
 
-    QString destination = location::localPath(m_location);
+std::optional<QString> MainWindow::askExtractDestination(const QString& suggestion)
+{
+    const auto text = tde::Dialog::getText(this, u"Extract To"_s, u"Folder to extract into (created if missing)"_s,
+        location::editableText(location::fromLocalPath(suggestion)), u"Extract"_s);
+    if (!text)
+        return std::nullopt;
+    const auto url = location::fromUserInput(*text, location::fromLocalPath(suggestion));
+    if (!url || !location::isLocal(*url) || !QDir().mkpath(location::localPath(*url))) {
+        m_toast->showMessage(u"“%1” is not a folder that can be extracted into."_s.arg(*text));
+        return std::nullopt;
+    }
+    return location::localPath(*url);
+}
+
+void MainWindow::extractFromArchive(const std::vector<FileEntry>& entries)
+{
+    const auto place = location::archivePlace(m_location);
+    if (!place)
+        return;
+    const auto destination = askExtractDestination(QFileInfo(place->file).absolutePath());
+    if (!destination)
+        return;
+    QStringList paths;
+    for (const FileEntry& entry : entries) {
+        if (const auto inside = location::archivePlace(entry.url))
+            paths << inside->inside;
+    }
+    auto* watcher = new QFutureWatcher<std::expected<void, QString>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, destination = *destination] {
+        watcher->deleteLater();
+        const auto result = watcher->result();
+        m_toast->showMessage(
+            result ? u"Extracted to “%1”."_s.arg(destination) : u"Could not extract: %1"_s.arg(result.error()),
+            result ? 4000 : 7000);
+    });
+    watcher->setFuture(QtConcurrent::run(archives::extractPaths, place->file, paths, *destination));
+}
+
+void MainWindow::extractArchives(const QStringList& archivePaths, bool askForDestination)
+{
+    QString destination = location::isLocal(m_location) ? location::localPath(m_location)
+                                                        : QFileInfo(archivePaths.value(0)).absolutePath();
     if (askForDestination) {
-        const auto text = Dialog::getText(this, u"Extract To"_s, u"Folder to extract into (created if missing)"_s,
-            location::editableText(m_location), u"Extract"_s);
-        if (!text)
+        const auto chosen = askExtractDestination(destination);
+        if (!chosen)
             return;
-        const auto url = location::fromUserInput(*text, m_location);
-        if (!url || !location::isLocal(*url) || !QDir().mkpath(location::localPath(*url))) {
-            m_toast->showMessage(u"“%1” is not a folder that can be extracted into."_s.arg(*text));
-            return;
-        }
-        destination = location::localPath(*url);
+        destination = *chosen;
     }
     if (!QFileInfo(destination).isWritable()) {
         m_toast->showMessage(u"You cannot create files in “%1”."_s.arg(destination));
         return;
     }
 
-    m_toast->showMessage(entries.size() == 1 ? u"Extracting “%1”…"_s.arg(entries.front().name)
-                                             : u"Extracting %1 archives…"_s.arg(entries.size()));
+    m_toast->showMessage(archivePaths.size() == 1
+            ? u"Extracting “%1”…"_s.arg(QFileInfo(archivePaths.front()).fileName())
+            : u"Extracting %1 archives…"_s.arg(archivePaths.size()));
     using Results = QList<std::pair<QString, std::expected<QString, QString>>>;
     auto* watcher = new QFutureWatcher<Results>(this);
     connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, destination] {
@@ -1124,9 +1413,9 @@ void MainWindow::extractSelection(bool askForDestination)
             m_selectWhenCreated = QFileInfo(extracted).fileName();
         m_toast->showMessage(u"Extracted to “%1”."_s.arg(extracted));
     });
-    watcher->setFuture(QtConcurrent::run([paths = pathsOf(entries), destination] {
+    watcher->setFuture(QtConcurrent::run([archivePaths, destination] {
         Results results;
-        for (const QString& path : paths)
+        for (const QString& path : archivePaths)
             results.append({path, archives::extract(path, destination)});
         return results;
     }));
@@ -1134,6 +1423,8 @@ void MainWindow::extractSelection(bool askForDestination)
 
 void MainWindow::compressSelection()
 {
+    if (refuseInArchive())
+        return;
     const std::vector<FileEntry> entries = selectedEntries();
     if (entries.empty())
         return;
@@ -1142,7 +1433,7 @@ void MainWindow::compressSelection()
     const QString suggested = entries.size() == 1
         ? (entries.front().isDir ? entries.front().name : QFileInfo(entries.front().name).completeBaseName())
         : u"Archive"_s;
-    const auto chosen = Dialog::askArchiveName(this, suggested, static_cast<int>(entries.size()));
+    const auto chosen = dialogs::askArchiveName(this, suggested, static_cast<int>(entries.size()));
     if (!chosen)
         return;
     if (!QFileInfo(directory).isWritable()) {
@@ -1177,10 +1468,54 @@ void MainWindow::openWith(const std::vector<FileEntry>& entries, const QString& 
 {
     const Applications applications = Applications::load();
     const DesktopApp* app = applications.find(appId);
-    if (!app)
+    if (!app || entries.empty())
         return;
-    if (const auto launched = Applications::launch(*app, pathsOf(entries), tde::desktop().terminal); !launched)
-        m_toast->showMessage(launched.error());
+    const auto launch = [this, app = *app](const QStringList& paths) {
+        if (const auto launched = Applications::launch(app, paths, tde::desktop().terminal); !launched)
+            m_toast->showMessage(launched.error());
+    };
+    if (location::isArchive(entries.front().url))
+        extractCopies(entries, launch);
+    else
+        launch(pathsOf(entries));
+}
+
+void MainWindow::extractCopies(const std::vector<FileEntry>& entries, std::function<void(const QStringList&)> then)
+{
+    // Grouped by the folder they are in, each group in a folder of its own: names may repeat.
+    QMap<QString, QStringList> groups; // archive folder location → paths inside the archive
+    QString archive;
+    for (const FileEntry& entry : entries) {
+        const auto place = location::archivePlace(entry.url);
+        if (!place)
+            continue;
+        archive = place->file;
+        groups[location::parent(entry.url)->toString()] << place->inside;
+    }
+    if (groups.isEmpty())
+        return;
+    const QString staging = archives::stagingFolder();
+    auto* watcher = new QFutureWatcher<std::expected<QStringList, QString>>(this);
+    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, then = std::move(then)] {
+        watcher->deleteLater();
+        const auto result = watcher->result();
+        if (!result)
+            m_toast->showMessage(u"Could not unpack: %1"_s.arg(result.error()), 7000);
+        else
+            then(*result);
+    });
+    watcher->setFuture(QtConcurrent::run([archive, groups, staging]() -> std::expected<QStringList, QString> {
+        QStringList extracted;
+        int group = 0;
+        for (const QStringList& paths : groups) {
+            const QString folder = u"%1/%2"_s.arg(staging).arg(group++);
+            if (const auto done = archives::extractPaths(archive, paths, folder); !done)
+                return std::unexpected(done.error());
+            for (const QString& path : paths)
+                extracted << folder + u'/' + path.section(u'/', -1);
+        }
+        return extracted;
+    }));
 }
 
 void MainWindow::chooseApplication(const std::vector<FileEntry>& entries)
@@ -1221,7 +1556,7 @@ void MainWindow::showPropertiesOf(const std::vector<FileEntry>& entries)
         row >= 0 && m_model->entry(row).path == entries.front().path)
         icon = m_model->index(row, 0).data(Qt::DecorationRole).value<QIcon>();
     if (icon.isNull())
-        icon = theme::themeIcon({location::directoryIconName(entries.front().path), u"folder"_s});
+        icon = tde::theme::themeIcon({location::directoryIconName(entries.front().path), u"folder"_s});
     showProperties(this, entries, icon);
 }
 
@@ -1265,6 +1600,12 @@ void MainWindow::updateStatus()
 
 void MainWindow::updateTrashBar()
 {
+    const auto place = location::archivePlace(m_location);
+    m_archiveBar->setVisible(place.has_value());
+    if (place)
+        m_archiveLabel->setText(
+            u"Inside the archive “%1”, which can only be read here."_s.arg(QFileInfo(place->file).fileName()));
+
     const bool inTrash = location::isTrash(m_location);
     m_trashBar->setVisible(inTrash);
     if (!inTrash)
@@ -1322,7 +1663,7 @@ void MainWindow::startTransfer(TransferKind kind, QList<TransferItem> items, boo
     m_app.jobs().start(
         kind, std::move(items), description,
         // Conflicts are asked in this window, or on their own if it was closed meanwhile.
-        [self](const Conflict& conflict) { return Dialog::askConflict(self, conflict); },
+        [self](const Conflict& conflict) { return dialogs::askConflict(self, conflict); },
         [self, &app, kind, copy, what, where, directory, undoable](const TransferResult& result) {
             const bool recorded = undoable && !result.completed.isEmpty();
             if (recorded) {
@@ -1379,6 +1720,20 @@ void MainWindow::putOnClipboard(bool cut)
     const std::vector<FileEntry> entries = selectedEntries();
     if (entries.empty() || location::isTrash(m_location))
         return;
+    // From an archive, copies are unpacked first: the clipboard holds files, for any program.
+    if (location::isArchive(m_location)) {
+        if (cut) {
+            refuseInArchive();
+            return;
+        }
+        m_toast->showMessage(u"Unpacking %1…"_s.arg(
+            entries.size() == 1 ? u"“%1”"_s.arg(entries.front().name) : u"%1 items"_s.arg(entries.size())));
+        extractCopies(entries, [this](const QStringList& paths) {
+            QGuiApplication::clipboard()->setMimeData(clipboard::encode({paths, false}).release());
+            m_toast->showMessage(u"%1 copied."_s.arg(describe(paths)));
+        });
+        return;
+    }
     QGuiApplication::clipboard()->setMimeData(clipboard::encode({pathsOf(entries), cut}).release());
     const QString what = describe(pathsOf(entries));
     m_toast->showMessage(cut ? u"%1 will be moved when pasted."_s.arg(what) : u"%1 copied."_s.arg(what));
@@ -1436,7 +1791,7 @@ void MainWindow::createItem(NewItem kind, const QString& templatePath)
     suggested = fileops::uniqueName(directory, suggested);
     // Preselect the name without its extension, so typing keeps the type.
     const qsizetype stem = folder ? -1 : QFileInfo(suggested).completeBaseName().size();
-    const auto name = Dialog::getText(this, folder ? u"New Folder"_s : u"New Document"_s,
+    const auto name = tde::Dialog::getText(this, folder ? u"New Folder"_s : u"New Document"_s,
         folder ? u"Folder name"_s : u"File name"_s, suggested, u"Create"_s, stem > 0 ? stem : -1);
     if (!name)
         return;
@@ -1501,7 +1856,7 @@ void MainWindow::mountDevice(const QString& id, bool newWindow)
                 self->showMounted(result, newWindow);
         },
         [self = QPointer(this), name](const gvfs::Prompt& prompt) -> std::optional<QString> {
-            return self ? Dialog::answerPrompt(self, name, prompt) : std::nullopt;
+            return self ? dialogs::answerPrompt(self, name, prompt) : std::nullopt;
         });
 }
 
@@ -1510,7 +1865,7 @@ void MainWindow::unlockDevice(const QString& id, bool newWindow, const QString& 
     const std::optional<Device> device = m_app.devices().find(id);
     if (!device)
         return;
-    const std::optional<QString> passphrase = Dialog::askPassphrase(this, device->label, error);
+    const std::optional<QString> passphrase = dialogs::askPassphrase(this, device->label, error);
     if (!passphrase)
         return;
     m_app.devices().unlock(
@@ -1529,7 +1884,7 @@ void MainWindow::unlockDevice(const QString& id, bool newWindow, const QString& 
 
 void MainWindow::makeDefault()
 {
-    if (!Dialog::confirm(this, u"Make Default File Manager"_s, u"Use Ariadne as your file manager?"_s,
+    if (!tde::Dialog::confirm(this, u"Make Default File Manager"_s, u"Use Ariadne as your file manager?"_s,
             u"Ariadne will open folders, show files when other applications ask (such as “Show in "
             u"Folder”), and start with your session so it is always ready. Open Nautilus windows "
             u"will close."_s,
@@ -1545,7 +1900,7 @@ void MainWindow::makeDefault()
 
 void MainWindow::connectToServer()
 {
-    const std::optional<QString> address = Dialog::getText(this, u"Connect to Server"_s,
+    const std::optional<QString> address = tde::Dialog::getText(this, u"Connect to Server"_s,
         u"Server address, such as smb://server/share or sftp://host/"_s, {}, u"Connect"_s);
     if (!address || address->trimmed().isEmpty())
         return;
@@ -1553,7 +1908,7 @@ void MainWindow::connectToServer()
     m_app.devices().connectTo(
         uri,
         [self = QPointer(this), uri](const gvfs::Prompt& prompt) -> std::optional<QString> {
-            return self ? Dialog::answerPrompt(self, uri, prompt) : std::nullopt;
+            return self ? dialogs::answerPrompt(self, uri, prompt) : std::nullopt;
         },
         [self = QPointer(this)](std::expected<QString, QString> result) {
             if (self)

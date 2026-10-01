@@ -19,12 +19,17 @@
 
 class QAction;
 class QActionGroup;
+class QLabel;
 class QLineEdit;
 class QMenu;
 class QStackedWidget;
 class QPushButton;
 class QModelIndex;
 class QToolButton;
+
+namespace tde {
+class Toast;
+} // namespace tde
 
 namespace ariadne {
 
@@ -34,7 +39,6 @@ class FileSortProxy;
 class FileView;
 class PathBar;
 class Sidebar;
-class Toast;
 
 class MainWindow : public QWidget {
     Q_OBJECT
@@ -44,6 +48,9 @@ public:
 
     void navigate(const QUrl& url);
     void showPropertiesOfPaths(const QStringList& paths);
+    // Takes changes to the desktop config (window buttons, theme) and to Ariadne's own.
+    void applyDesktopConfig();
+    void applyConfig(const Config& config);
 
 signals:
     // The window was closed; its owner deletes it.
@@ -87,6 +94,7 @@ private:
     void openFile(const FileEntry& entry);
     void openInApplication(const FileEntry& entry);
     void showContextMenu(const QPoint& globalPosition, const QModelIndex& index);
+    void fillArchiveMenu(QMenu& menu, const QModelIndex& index);
 
     void trashSelection();
     // Asks first, since deleted files are gone for good.
@@ -121,6 +129,17 @@ private:
     void closeSearch(bool showFolder);
     void runSearch();
     void extractSelection(bool askForDestination);
+    // Unpacks whole archives, here or where the user says.
+    void extractArchives(const QStringList& archivePaths, bool askForDestination);
+    // Unpacks what is selected inside the archive shown, where the user says.
+    void extractFromArchive(const std::vector<FileEntry>& entries);
+    std::optional<QString> askExtractDestination(const QString& suggestion);
+    // Unpacks copies of entries inside an archive to a staging folder, then hands their paths on.
+    void extractCopies(const std::vector<FileEntry>& entries, std::function<void(const QStringList&)> then);
+    // Inside an archive, says it can only be read, and returns true.
+    bool refuseInArchive();
+    // Where activating `entry` goes: into a folder, or an archive opened as one.
+    std::optional<QUrl> folderOf(const FileEntry& entry) const;
     void openWith(const std::vector<FileEntry>& entries, const QString& appId);
     void chooseApplication(const std::vector<FileEntry>& entries);
     void showPropertiesOf(const std::vector<FileEntry>& entries);
@@ -134,6 +153,11 @@ private:
     // Asks for a name, then creates the folder or document in the current folder.
     void createItem(NewItem kind, const QString& templatePath = {});
 
+    void placeWindowButtons();
+    // The user's own actions that apply to `entries` (empty: the folder shown), at the end of `menu`.
+    void addCustomActions(QMenu& menu, const std::vector<FileEntry>& entries);
+    void runCustomAction(const CustomAction& action, const std::vector<ActionTarget>& targets);
+    void setupCustomShortcuts();
     void mountDevice(const QString& id, bool newWindow);
     void unlockDevice(const QString& id, bool newWindow, const QString& error = {});
     // Mounts a network location typed in by the user.
@@ -148,8 +172,11 @@ private:
     FileView* m_view = nullptr;
     PathBar* m_pathBar = nullptr;
     Sidebar* m_sidebar = nullptr;
-    Toast* m_toast = nullptr;
+    tde::Toast* m_toast = nullptr;
     QToolButton* m_viewButton = nullptr;
+    std::vector<QAction*> m_customShortcuts;
+    QWidget* m_leftButtonSlot = nullptr;
+    QWidget* m_rightButtonSlot = nullptr;
 
     QAction* m_backAction = nullptr;
     QAction* m_forwardAction = nullptr;
@@ -181,6 +208,8 @@ private:
     QWidget* m_trashBar = nullptr;
     QPushButton* m_restoreButton = nullptr;
     QPushButton* m_emptyTrashButton = nullptr;
+    QWidget* m_archiveBar = nullptr;
+    QLabel* m_archiveLabel = nullptr;
     QAction* m_closeAction = nullptr;
     QAction* m_quitAction = nullptr;
     QAction* m_foldersFirstAction = nullptr;

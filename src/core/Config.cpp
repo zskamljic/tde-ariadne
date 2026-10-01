@@ -1,6 +1,8 @@
 #include "Config.hpp"
 
-#include "tde/LuaConfig.hpp"
+#include "Applications.hpp"
+
+#include <tde/LuaConfig.hpp>
 
 #include <QDir>
 #include <QFileInfo>
@@ -22,6 +24,33 @@ constexpr std::pair<QStringView, SortKey> sortKeys[] = {
     {u"size", SortKey::Size},
     {u"type", SortKey::Type},
 };
+
+constexpr std::pair<QStringView, CustomAction::Selection> selections[] = {
+    {u"any", CustomAction::Selection::Any},
+    {u"single", CustomAction::Selection::Single},
+    {u"multiple", CustomAction::Selection::Multiple},
+    {u"none", CustomAction::Selection::None},
+};
+
+void parseAction(tde::LuaTableReader& reader, Config& config)
+{
+    CustomAction action;
+    action.name = reader.string("name").value_or(QString());
+    bool wasString = false;
+    if (const auto command = reader.strings("command", &wasString))
+        action.command = wasString ? splitCommandLine(command->front()) : *command;
+    if (action.name.isEmpty() || action.command.isEmpty()) {
+        reader.warn("command", u"an action needs a name and a command; skipped"_s);
+        return;
+    }
+    action.icon = reader.string("icon").value_or(QString());
+    action.shortcut = reader.string("shortcut").value_or(QString());
+    action.types = reader.strings("types").value_or(QStringList());
+    if (const auto selection = reader.choice<CustomAction::Selection>("selection", selections))
+        action.selection = *selection;
+    action.terminal = reader.boolean("terminal").value_or(false);
+    config.actions.push_back(std::move(action));
+}
 
 void parse(tde::LuaTableReader& reader, Config& config)
 {
@@ -55,7 +84,13 @@ void parse(tde::LuaTableReader& reader, Config& config)
             view.gridIconSize = *size;
         if (const auto size = reader.integer("list_icon_size", 16, 64))
             view.listIconSize = *size;
+        if (const auto expandable = reader.boolean("expandable_folders"))
+            view.expandableFolders = *expandable;
+        if (const auto archives = reader.boolean("archives_as_folders"))
+            view.archivesAsFolders = *archives;
     });
+
+    reader.table("actions", [&] { reader.forEachArrayTable([&](int) { parseAction(reader, config); }); });
 
     reader.table("icons", [&] {
         reader.forEachStringPair(
