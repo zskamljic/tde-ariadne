@@ -7,7 +7,7 @@ Licensed under the GNU General Public License, version 3 or later; see [LICENSE]
 
 ## Installing
 
-On Arch Linux, from the AUR: `ariadne` for releases, `ariadne-git` for the latest commit.
+On Arch Linux, from the AUR: `tde-ariadne` for releases, `tde-ariadne-git` for the latest commit.
 The PKGBUILDs live in [`packaging/arch`](packaging/arch).
 
 ## Building

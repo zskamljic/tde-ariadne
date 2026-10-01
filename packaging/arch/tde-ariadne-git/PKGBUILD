@@ -1,7 +1,7 @@
 # Maintainer: Zan Skamljic <zan.skamljic@gmail.com>
 
-pkgname=ariadne-git
-_pkgname=ariadne
+pkgname=tde-ariadne-git
+_pkgname=tde-ariadne
 pkgver=0.1.0
 pkgrel=1
 pkgdesc='A Nautilus-style file manager built with Qt 6 (development version)'
