@@ -1,8 +1,11 @@
 #pragma once
 
+#include <QFile>
 #include <QList>
 #include <QString>
 #include <QStringList>
+
+#include <optional>
 
 namespace ariadne::fileops {
 
@@ -48,5 +51,20 @@ QString uniqueName(const QString& directory, const QString& name);
 
 // The name for a copy of `name` in its own folder: "name (Copy)", then "name (Copy 2)", …
 QString duplicateName(const QString& directory, const QString& name);
+
+// The permission bits of `path` as they are stored: owner, group and others. (QFileInfo also
+// reports the current user's rights, which QFile::setPermissions would take for the owner's.)
+QFile::Permissions modeOf(const QString& path);
+
+// Sets the permission bits in `mask` to `bits`, leaving the others as they are.
+struct PermissionChange {
+    QFile::Permissions mask;
+    QFile::Permissions bits;
+};
+
+// Changes the permissions of everything inside `folder` (not the folder itself), files and
+// folders each their own way; nullopt leaves that kind as it is. Links are not followed.
+QList<Failure> changeEnclosedPermissions(
+    const QString& folder, std::optional<PermissionChange> files, std::optional<PermissionChange> folders);
 
 } // namespace ariadne::fileops

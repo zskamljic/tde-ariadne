@@ -1,10 +1,13 @@
 #include "PropertiesDialog.hpp"
 
-#include "Dialog.hpp"
+#include "core/FileOperations.hpp"
 #include "core/Location.hpp"
+
+#include <tde/Dialog.hpp>
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QDirListing>
 #include <QFileInfo>
 #include <QFormLayout>
@@ -12,11 +15,15 @@
 #include <QLabel>
 #include <QLocale>
 #include <QPointer>
+#include <QPushButton>
+#include <QStorageInfo>
 #include <QVBoxLayout>
 #include <QtConcurrentRun>
 
+#include <algorithm>
 #include <atomic>
 #include <memory>
+#include <optional>
 
 #include <unistd.h>
 
@@ -29,12 +36,18 @@ struct Usage {
     qint64 bytes = 0;
     qint64 files = 0;
     qint64 folders = 0;
+    qint64 available = -1; // on the disk the first item is on; -1 when unknown
+    qint64 total = -1;
 };
 
 // Adds up everything under `paths`, without following links. Stops early when cancelled.
 Usage measure(const QStringList& paths, const std::shared_ptr<std::atomic<bool>>& cancelled)
 {
     Usage usage;
+    if (const QStorageInfo storage(paths.value(0)); storage.isValid() && storage.isReady()) {
+        usage.available = storage.bytesAvailable();
+        usage.total = storage.bytesTotal();
+    }
     for (const QString& path : paths) {
         const QFileInfo info(path);
         if (!info.isDir() || info.isSymLink()) {
@@ -117,37 +130,132 @@ QList<AccessLevel> accessLevels(bool folder)
     return {{u"None"_s, {}}, {u"Read-only"_s, r}, {u"Read and write"_s, r | w}};
 }
 
-// A combo box choosing what `who` may do; changes are applied to the file right away.
-QComboBox* accessBox(const QString& path, bool folder, Who who, bool editable, QLabel* error)
+// What `who` may do with all of `paths`, if it is the same for each.
+std::optional<QFile::Permissions> commonAccess(const QStringList& paths, QFile::Permissions relevant)
+{
+    std::optional<QFile::Permissions> common;
+    for (const QString& path : paths) {
+        const QFile::Permissions bits = fileops::modeOf(path) & relevant;
+        if (common && *common != bits)
+            return std::nullopt;
+        common = bits;
+    }
+    return common;
+}
+
+QString setPermissionsError(int failed)
+{
+    return failed == 0 ? QString()
+        : failed == 1  ? u"The permissions could not be changed."_s
+                       : u"The permissions of %1 items could not be changed."_s.arg(failed);
+}
+
+// A combo box choosing what `who` may do; changes are applied to the files right away.
+QComboBox* accessBox(const QStringList& paths, bool folders, Who who, bool editable, QLabel* error)
 {
     auto* box = new QComboBox;
     const QFile::Permissions all = forWho(QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner, who);
     // Files keep their executable bit, which has a checkbox of its own.
-    const QFile::Permissions relevant = folder ? all : all & ~forWho(QFile::ExeOwner, who);
-    const QFile::Permissions current = QFileInfo(path).permissions() & relevant;
+    const QFile::Permissions relevant = folders ? all : all & ~forWho(QFile::ExeOwner, who);
+    const std::optional<QFile::Permissions> current = commonAccess(paths, relevant);
 
     int selected = -1;
-    for (const AccessLevel& level : accessLevels(folder)) {
+    for (const AccessLevel& level : accessLevels(folders)) {
         const QFile::Permissions bits = forWho(level.ofOwner, who);
         box->addItem(level.label, bits.toInt());
-        if (bits == current)
+        if (current && bits == *current)
             selected = box->count() - 1;
     }
     if (selected < 0) {
-        box->addItem(u"Custom"_s, current.toInt());
+        // Not one of the levels, or not the same for all: shown, but not offered.
+        box->addItem(current ? u"Custom"_s : u"Mixed"_s, current ? current->toInt() : -1);
         selected = box->count() - 1;
     }
     box->setCurrentIndex(selected);
     box->setEnabled(editable);
 
-    QObject::connect(box, &QComboBox::activated, box, [box, path, relevant, error] {
+    QObject::connect(box, &QComboBox::activated, box, [box, paths, relevant, error] {
+        if (box->currentData().toInt() < 0)
+            return;
         const QFile::Permissions wanted = QFile::Permissions::fromInt(box->currentData().toInt());
-        const QFile::Permissions permissions = (QFileInfo(path).permissions() & ~relevant) | wanted;
-        const bool ok = QFile::setPermissions(path, permissions);
-        error->setVisible(!ok);
-        error->setText(ok ? QString() : u"The permissions could not be changed."_s);
+        int failed = 0;
+        for (const QString& path : paths) {
+            if (!QFile::setPermissions(path, (fileops::modeOf(path) & ~relevant) | wanted))
+                ++failed;
+        }
+        error->setVisible(failed > 0);
+        error->setText(setPermissionsError(failed));
     });
     return box;
+}
+
+// Asks how to change the permissions of everything in `folder`, and changes them in the
+// background.
+void changeEnclosed(QWidget* parent, const QString& folder, QLabel* error)
+{
+    tde::Dialog dialog(u"Change Permissions for Enclosed Files"_s, parent);
+    auto* form = new QFormLayout;
+    form->setLabelAlignment(Qt::AlignRight);
+    form->setHorizontalSpacing(14);
+    form->setVerticalSpacing(8);
+
+    struct Choice {
+        QComboBox* box;
+        Who who;
+        bool folders;
+    };
+    std::vector<Choice> choices;
+    for (const bool folders : {false, true}) {
+        auto* heading = new QLabel(folders ? u"Folders"_s : u"Files"_s);
+        heading->setObjectName(u"ConfirmMessage"_s);
+        form->addRow(heading);
+        for (const auto& [label, who] : {std::pair {u"Owner"_s, Who::Owner}, std::pair {u"Group"_s, Who::Group},
+                 std::pair {u"Others"_s, Who::Others}}) {
+            auto* box = new QComboBox;
+            box->addItem(u"Don't change"_s, -1);
+            for (const AccessLevel& level : accessLevels(folders))
+                box->addItem(level.label, forWho(level.ofOwner, who).toInt());
+            form->addRow(label, box);
+            choices.push_back({box, who, folders});
+        }
+    }
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
+    QPushButton* change = buttons->addButton(u"Change"_s, QDialogButtonBox::AcceptRole);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+    dialog.contentLayout()->addLayout(form);
+    dialog.contentLayout()->addSpacing(6);
+    dialog.contentLayout()->addWidget(buttons);
+    dialog.setDefaultButton(change);
+    if (dialog.run() != QDialog::Accepted)
+        return;
+
+    std::optional<fileops::PermissionChange> files;
+    std::optional<fileops::PermissionChange> folders;
+    for (const Choice& choice : choices) {
+        const int bits = choice.box->currentData().toInt();
+        if (bits < 0)
+            continue;
+        // Files keep their executable bits.
+        const QFile::Permissions mask = forWho(choice.folders ? QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner
+                                                              : QFile::ReadOwner | QFile::WriteOwner,
+            choice.who);
+        auto& change = choice.folders ? folders : files;
+        if (!change)
+            change = fileops::PermissionChange {};
+        change->mask |= mask;
+        change->bits |= QFile::Permissions::fromInt(bits);
+    }
+    if (!files && !folders)
+        return;
+    auto* watcher = new QFutureWatcher<QList<fileops::Failure>>(parent);
+    QObject::connect(watcher, &QFutureWatcherBase::finished, error, [watcher, error] {
+        watcher->deleteLater();
+        const int failed = int(watcher->result().size());
+        error->setVisible(failed > 0);
+        error->setText(setPermissionsError(failed));
+    });
+    watcher->setFuture(QtConcurrent::run(fileops::changeEnclosedPermissions, folder, files, folders));
 }
 
 } // namespace
@@ -160,7 +268,7 @@ void showProperties(QWidget* parent, const std::vector<FileEntry>& entries, cons
     const FileEntry& first = entries.front();
     const QFileInfo info(first.path);
 
-    auto* dialog = new Dialog(single ? u"%1 Properties"_s.arg(first.name) : u"Properties"_s, parent);
+    auto* dialog = new tde::Dialog(single ? u"%1 Properties"_s.arg(first.name) : u"Properties"_s, parent);
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     QVBoxLayout* layout = dialog->contentLayout();
 
@@ -209,9 +317,28 @@ void showProperties(QWidget* parent, const std::vector<FileEntry>& entries, cons
         form->addRow(u"Accessed"_s, valueLabel(formatDate(info.lastRead())));
         if (const QDateTime created = info.birthTime(); created.isValid())
             form->addRow(u"Created"_s, valueLabel(formatDate(created)));
+    }
+    // For a folder, how much room is left where it is.
+    QLabel* freeSpace = nullptr;
+    if (single && first.isDir && location::isLocal(first.url) && !location::isTrash(first.url)) {
+        freeSpace = valueLabel(u"Calculating…"_s);
+        form->addRow(u"Free space"_s, freeSpace);
+    }
 
-        // Permissions, changeable by the owner.
-        const bool owner = info.ownerId() == ::getuid();
+    // Permissions, changeable by their owner; for several items at once when they are all
+    // files or all folders, as the two have different kinds of access.
+    const bool allFolders = std::ranges::all_of(entries, [](const FileEntry& e) { return e.isDir; });
+    const bool allFiles = std::ranges::none_of(entries, [](const FileEntry& e) { return e.isDir; });
+    const bool links = std::ranges::any_of(entries, [](const FileEntry& e) { return e.isSymlink; });
+    if ((allFolders || allFiles) && !links && !location::isTrash(first.url) && location::isLocal(first.url)) {
+        const bool owner = std::ranges::all_of(
+            entries, [](const FileEntry& e) { return QFileInfo(e.path).ownerId() == ::getuid(); });
+        const auto common = [&](auto name) {
+            const QString value = name(QFileInfo(first.path));
+            const bool same
+                = std::ranges::all_of(entries, [&](const FileEntry& e) { return name(QFileInfo(e.path)) == value; });
+            return same ? value : u"Various"_s;
+        };
         auto* error = new QLabel;
         error->setObjectName(u"AboutDetails"_s);
         error->hide();
@@ -224,30 +351,49 @@ void showProperties(QWidget* parent, const std::vector<FileEntry>& entries, cons
         layout->addSpacing(6);
         layout->addWidget(heading);
         layout->addLayout(permissions);
-        permissions->addRow(u"Owner"_s, valueLabel(info.owner()));
-        permissions->addRow(u"Access"_s, accessBox(first.path, first.isDir, Who::Owner, owner, error));
-        permissions->addRow(u"Group"_s, valueLabel(info.group()));
-        permissions->addRow(u"Access"_s, accessBox(first.path, first.isDir, Who::Group, owner, error));
-        permissions->addRow(u"Others"_s, accessBox(first.path, first.isDir, Who::Others, owner, error));
-        if (!first.isDir) {
+        permissions->addRow(u"Owner"_s, valueLabel(common([](const QFileInfo& i) { return i.owner(); })));
+        permissions->addRow(u"Access"_s, accessBox(paths, allFolders, Who::Owner, owner, error));
+        permissions->addRow(u"Group"_s, valueLabel(common([](const QFileInfo& i) { return i.group(); })));
+        permissions->addRow(u"Access"_s, accessBox(paths, allFolders, Who::Group, owner, error));
+        permissions->addRow(u"Others"_s, accessBox(paths, allFolders, Who::Others, owner, error));
+        if (allFiles) {
             auto* executable = new QCheckBox(u"Allow executing file as program"_s);
-            executable->setChecked(info.permissions() & QFile::ExeOwner);
+            const auto executables = std::ranges::count_if(
+                paths, [](const QString& path) { return bool(fileops::modeOf(path) & QFile::ExeOwner); });
+            executable->setTristate(executables != 0 && executables != paths.size());
+            executable->setCheckState(executables == 0 ? Qt::Unchecked
+                    : executables == paths.size()      ? Qt::Checked
+                                                       : Qt::PartiallyChecked);
             executable->setEnabled(owner);
-            QObject::connect(executable, &QCheckBox::toggled, executable, [path = first.path, error](bool on) {
-                // Execute goes with read, for everyone who may read the file.
-                QFile::Permissions permissions = QFileInfo(path).permissions();
-                const std::pair<QFile::Permission, QFile::Permission> pairs[] = {
-                    {QFile::ReadOwner, QFile::ExeOwner},
-                    {QFile::ReadGroup, QFile::ExeGroup},
-                    {QFile::ReadOther, QFile::ExeOther},
-                };
-                for (const auto& [read, exe] : pairs)
-                    permissions.setFlag(exe, on && permissions.testFlag(read));
-                const bool ok = QFile::setPermissions(path, permissions);
-                error->setVisible(!ok);
-                error->setText(ok ? QString() : u"The permissions could not be changed."_s);
+            QObject::connect(executable, &QCheckBox::clicked, executable, [executable, paths, error] {
+                // Clicked out of "some", it means all; it does not go back to "some".
+                executable->setTristate(false);
+                const bool on = executable->checkState() != Qt::Unchecked;
+                int failed = 0;
+                for (const QString& path : paths) {
+                    // Execute goes with read, for everyone who may read the file.
+                    QFile::Permissions permissions = fileops::modeOf(path);
+                    const std::pair<QFile::Permission, QFile::Permission> pairs[] = {
+                        {QFile::ReadOwner, QFile::ExeOwner},
+                        {QFile::ReadGroup, QFile::ExeGroup},
+                        {QFile::ReadOther, QFile::ExeOther},
+                    };
+                    for (const auto& [read, exe] : pairs)
+                        permissions.setFlag(exe, on && permissions.testFlag(read));
+                    if (!QFile::setPermissions(path, permissions))
+                        ++failed;
+                }
+                error->setVisible(failed > 0);
+                error->setText(setPermissionsError(failed));
             });
             permissions->addRow(QString(), executable);
+        }
+        if (single && allFolders && owner) {
+            auto* enclosed = new QPushButton(u"Change Permissions for Enclosed Files…"_s);
+            enclosed->setAutoDefault(false); // Enter is not meant for it
+            QObject::connect(enclosed, &QPushButton::clicked, dialog,
+                [dialog, path = first.path, error] { changeEnclosed(dialog, path, error); });
+            permissions->addRow(QString(), enclosed);
         }
         layout->addWidget(error);
     }
@@ -256,16 +402,25 @@ void showProperties(QWidget* parent, const std::vector<FileEntry>& entries, cons
     const auto cancelled = std::make_shared<std::atomic<bool>>(false);
     QObject::connect(dialog, &QObject::destroyed, [cancelled] { *cancelled = true; });
     auto* watcher = new QFutureWatcher<Usage>(dialog);
-    QObject::connect(watcher, &QFutureWatcherBase::finished, dialog, [watcher, size, contents, selectedFolders] {
-        const Usage usage = watcher->result();
-        size->setText(formatSize(usage.bytes));
-        if (contents) {
-            QStringList parts {count(usage.files, u"file"_s, u"files"_s)};
-            if (const qint64 folders = usage.folders - selectedFolders; folders > 0)
-                parts << count(folders, u"folder"_s, u"folders"_s);
-            contents->setText(parts.join(u", "_s));
-        }
-    });
+    QObject::connect(
+        watcher, &QFutureWatcherBase::finished, dialog, [watcher, size, contents, freeSpace, selectedFolders] {
+            const Usage usage = watcher->result();
+            if (freeSpace) {
+                const QLocale locale;
+                freeSpace->setText(usage.total <= 0
+                        ? u"Unknown"_s
+                        : u"%1 free of %2"_s.arg(
+                              locale.formattedDataSize(usage.available, 1, QLocale::DataSizeSIFormat),
+                              locale.formattedDataSize(usage.total, 1, QLocale::DataSizeSIFormat)));
+            }
+            size->setText(formatSize(usage.bytes));
+            if (contents) {
+                QStringList parts {count(usage.files, u"file"_s, u"files"_s)};
+                if (const qint64 folders = usage.folders - selectedFolders; folders > 0)
+                    parts << count(folders, u"folder"_s, u"folders"_s);
+                contents->setText(parts.join(u", "_s));
+            }
+        });
     watcher->setFuture(QtConcurrent::run(measure, paths, cancelled));
 
     dialog->show();

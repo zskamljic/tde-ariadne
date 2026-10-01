@@ -3,6 +3,7 @@
 #include "Location.hpp"
 
 #include <QDir>
+#include <QDirListing>
 #include <QFile>
 #include <QFileInfo>
 #include <QMimeDatabase>
@@ -216,6 +217,44 @@ QString duplicateName(const QString& directory, const QString& name)
         if (!taken(dir, candidate))
             return candidate;
     }
+}
+
+QFile::Permissions modeOf(const QString& path)
+{
+    // The User flags say what the current user may do; set, Qt takes them for the owner's.
+    return QFileInfo(path).permissions() & ~(QFile::ReadUser | QFile::WriteUser | QFile::ExeUser);
+}
+
+QList<Failure> changeEnclosedPermissions(
+    const QString& folder, std::optional<PermissionChange> files, std::optional<PermissionChange> folders)
+{
+    QList<Failure> failures;
+    if (!files && !folders)
+        return failures;
+    // Everything is found first: taking access to a folder away midway would hide what is in it.
+    QStringList filePaths;
+    QStringList folderPaths;
+    using Flag = QDirListing::IteratorFlag;
+    for (const auto& entry : QDirListing(folder, Flag::Recursive | Flag::IncludeHidden)) {
+        if (!entry.isSymLink())
+            (entry.isDir() ? folderPaths : filePaths) << entry.absoluteFilePath();
+    }
+    const auto apply = [&](const QString& path, const PermissionChange& change) {
+        const QFile::Permissions current = modeOf(path);
+        const QFile::Permissions wanted = (current & ~change.mask) | (change.bits & change.mask);
+        if (wanted != current && !QFile::setPermissions(path, wanted))
+            failures.append({path, u"The permissions could not be changed."_s});
+    };
+    if (files) {
+        for (const QString& path : std::as_const(filePaths))
+            apply(path, *files);
+    }
+    // Deepest first, for the same reason.
+    if (folders) {
+        for (auto it = folderPaths.crbegin(); it != folderPaths.crend(); ++it)
+            apply(*it, *folders);
+    }
+    return failures;
 }
 
 } // namespace ariadne::fileops

@@ -168,6 +168,51 @@ private slots:
         QVERIFY(!trashFailures.first().reason.isEmpty());
         QCOMPARE(fileops::deletePermanently({missing}).size(), 1);
     }
+
+    void enclosedPermissions()
+    {
+        QTemporaryDir dir;
+        const QString root = dir.filePath(u"root"_s);
+        QVERIFY(QDir().mkpath(root + u"/inner/deeper"_s));
+        for (const QString& name : {u"a.txt"_s, u"inner/b.txt"_s, u"inner/deeper/c.txt"_s}) {
+            QFile file(root + u'/' + name);
+            QVERIFY(file.open(QIODevice::WriteOnly));
+        }
+        QVERIFY(QFile::link(root + u"/a.txt"_s, root + u"/link"_s));
+        const auto rw = QFile::ReadOwner | QFile::WriteOwner;
+        const auto all = QFile::ReadOwner | QFile::WriteOwner | QFile::ExeOwner;
+
+        // Files: read-only for their owner. Folders: owner may do everything, nobody else anything.
+        const auto failures = fileops::changeEnclosedPermissions(root,
+            fileops::PermissionChange {
+                rw | QFile::ReadGroup | QFile::WriteGroup | QFile::ReadOther | QFile::WriteOther, QFile::ReadOwner},
+            fileops::PermissionChange {all | QFile::ReadGroup | QFile::WriteGroup | QFile::ExeGroup | QFile::ReadOther
+                    | QFile::WriteOther | QFile::ExeOther,
+                all});
+        QVERIFY(failures.isEmpty());
+
+        const auto bits = [](const QString& path) {
+            return QFileInfo(path).permissions() & ~(QFile::ReadUser | QFile::WriteUser | QFile::ExeUser);
+        };
+        for (const QString& name : {u"a.txt"_s, u"inner/b.txt"_s, u"inner/deeper/c.txt"_s})
+            QCOMPARE(bits(root + u'/' + name), QFile::Permissions(QFile::ReadOwner));
+        for (const QString& name : {u"inner"_s, u"inner/deeper"_s})
+            QCOMPARE(bits(root + u'/' + name), QFile::Permissions(all));
+        // The folder itself is left as it was.
+        QVERIFY(bits(root) & QFile::ReadOther);
+
+        // Taking access to folders away still reaches what is inside them.
+        QVERIFY(
+            fileops::changeEnclosedPermissions(root, fileops::PermissionChange {QFile::WriteOwner, QFile::WriteOwner},
+                fileops::PermissionChange {QFile::ExeOwner, {}})
+                .isEmpty());
+        // Looking inside needs access to the folder again, one level at a time.
+        QCOMPARE(bits(root + u"/inner"_s), QFile::Permissions(QFile::ReadOwner | QFile::WriteOwner));
+        QVERIFY(QFile::setPermissions(root + u"/inner"_s, QFile::Permissions(all)));
+        QCOMPARE(bits(root + u"/inner/deeper"_s), QFile::Permissions(QFile::ReadOwner | QFile::WriteOwner));
+        QVERIFY(QFile::setPermissions(root + u"/inner/deeper"_s, QFile::Permissions(all)));
+        QCOMPARE(bits(root + u"/inner/deeper/c.txt"_s), QFile::Permissions(QFile::ReadOwner | QFile::WriteOwner));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestFileOperations)
