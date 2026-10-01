@@ -1,5 +1,4 @@
 #include "core/Config.hpp"
-#include "tde/DesktopConfig.hpp"
 
 #include <QDateTime>
 #include <QFile>
@@ -33,59 +32,6 @@ private:
     QTemporaryDir m_dir;
 
 private slots:
-    void desktopDefaults()
-    {
-        tde::DesktopConfig config;
-        const auto warnings = tde::readDesktopConfig(writeFile(u"tde.lua"_s, "return {}"), config);
-        QVERIFY(warnings.has_value());
-        QVERIFY(warnings->isEmpty());
-        QCOMPARE(config.windowButtons.side, tde::ButtonSide::Right);
-        QCOMPARE(config.windowButtons.order.size(), 3u);
-        QCOMPARE(config.appearance.theme, u"arc-dark"_s);
-        QCOMPARE(config.appearance.cornerRadius, 5);
-    }
-
-    void desktopConfig()
-    {
-        tde::DesktopConfig config;
-        const auto warnings = tde::readDesktopConfig(
-            writeFile(u"tde.lua"_s,
-                "local radius = 4\n"
-                "return {\n"
-                "window_buttons = { position = \"left\", order = { \"close\", \"maximize\" } },\n"
-                "appearance = { theme = \"arc\", icon_theme = \"Paper\", corner_radius = radius * 2,\n"
-                "               colors = { accent = \"#ff0000\" } },\n"
-                "}\n"),
-            config);
-        QVERIFY(warnings.has_value());
-        QVERIFY2(warnings->isEmpty(), qPrintable(warnings->join(u'\n')));
-        QCOMPARE(config.windowButtons.side, tde::ButtonSide::Left);
-        QCOMPARE(config.windowButtons.order, (std::vector {tde::WindowButton::Close, tde::WindowButton::Maximize}));
-        QCOMPARE(config.appearance.theme, u"arc"_s);
-        QCOMPARE(config.appearance.iconTheme, u"Paper"_s);
-        QCOMPARE(config.appearance.cornerRadius, 8);
-        QCOMPARE(config.appearance.colors.value(u"accent"_s), u"#ff0000"_s);
-    }
-
-    void badValuesWarnAndKeepDefaults()
-    {
-        tde::DesktopConfig config;
-        const auto warnings
-            = tde::readDesktopConfig(writeFile(u"tde.lua"_s,
-                                         "return {\n"
-                                         "window_buttons = { position = \"top\", order = { \"close\", \"shade\" } },\n"
-                                         "appearance = { corner_radius = 100, theme = 3 },\n"
-                                         "}\n"),
-                config);
-        QVERIFY(warnings.has_value());
-        QCOMPARE(warnings->size(), 4);
-        QVERIFY(warnings->first().startsWith(u"window_buttons.position:"_s));
-        QCOMPARE(config.windowButtons.side, tde::ButtonSide::Right);
-        QCOMPARE(config.windowButtons.order, std::vector {tde::WindowButton::Close});
-        QCOMPARE(config.appearance.cornerRadius, 5);
-        QCOMPARE(config.appearance.theme, u"arc-dark"_s);
-    }
-
     void applicationConfig()
     {
         Config config;

@@ -1,7 +1,8 @@
 #include "PathBar.hpp"
 
-#include "Theme.hpp"
 #include "core/Location.hpp"
+
+#include <tde/Theme.hpp>
 
 #include <QAbstractButton>
 #include <QApplication>
@@ -233,7 +234,7 @@ void PathBar::rebuildCrumbs()
         button->setText(crumb.label);
         button->setToolTip(location::editableText(crumb.url));
         if (!crumb.iconName.isEmpty()) {
-            button->setIcon(theme::symbolicIcon(crumb.iconName));
+            button->setIcon(tde::theme::symbolicIcon(crumb.iconName));
             button->setIconSize(QSize(16, 16));
         }
         button->setToolButtonStyle(crumb.label.isEmpty() ? Qt::ToolButtonIconOnly

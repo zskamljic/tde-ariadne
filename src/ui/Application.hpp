@@ -6,6 +6,8 @@
 #include "core/Config.hpp"
 #include "core/DeviceMonitor.hpp"
 
+#include <tde/ConfigWatcher.hpp>
+
 #include <QObject>
 #include <QTimer>
 #include <QUrl>
@@ -30,6 +32,8 @@ public:
     const Config& config() const { return m_config; }
     // Applies `change` to the settings and saves them shortly after.
     void updateConfig(const std::function<void(Config&)>& change);
+    // Applies edits to the desktop config and Ariadne's config to all windows as they are saved.
+    void watchConfig(const QString& desktopConfigPath, const QString& configPath);
 
     Bookmarks& bookmarks() { return m_bookmarks; }
     DeviceMonitor& devices() { return m_devices; }
@@ -62,9 +66,14 @@ private:
     };
 
     void saveState();
+    void reloadDesktopConfig(const QString& path);
+    void applyDesktopConfig();
+    void reloadConfig();
 
     Config m_config;
     QString m_statePath;
+    QString m_configPath;
+    std::unique_ptr<tde::ConfigWatcher> m_configWatcher;
     QTimer m_saveTimer;
     FolderSettings m_folders;
     QTimer m_foldersSaveTimer;

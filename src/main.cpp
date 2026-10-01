@@ -1,11 +1,13 @@
 #include "core/Config.hpp"
 #include "core/DefaultFileManager.hpp"
 #include "core/Location.hpp"
-#include "tde/DesktopConfig.hpp"
-#include "tde/LuaConfig.hpp"
 #include "ui/Application.hpp"
 #include "ui/FileManagerService.hpp"
-#include "ui/Theme.hpp"
+#include "ui/StyleSheet.hpp"
+
+#include <tde/DesktopConfig.hpp>
+#include <tde/LuaConfig.hpp>
+#include <tde/Theme.hpp>
 
 #include <QApplication>
 #include <QCommandLineParser>
@@ -98,13 +100,17 @@ int main(int argc, char* argv[])
         return 0;
 
     const QString configDir = parser.value(configOption);
+    // On first start, the desktop config is written out with its defaults, ready to edit.
+    tde::createDesktopConfig(configDir + u"/config.lua"_s);
     tde::setDesktop(tde::loadDesktopConfig(configDir + u"/config.lua"_s));
-    ariadne::theme::apply(app, tde::desktop().appearance);
-    QApplication::setWindowIcon(ariadne::theme::themeIcon({u"system-file-manager"_s, u"folder"_s}));
+    tde::theme::setApplicationStyleSheet(ariadne::styleSheet());
+    tde::theme::apply(app, tde::desktop().appearance);
+    QApplication::setWindowIcon(tde::theme::themeIcon({u"system-file-manager"_s, u"folder"_s}));
 
     const QString stateFile = configDir + u"/ariadne/state.lua"_s;
     ariadne::Application ariadne(ariadne::loadConfig(configDir + u"/ariadne/config.lua"_s, stateFile), stateFile);
 
+    ariadne.watchConfig(configDir + u"/config.lua"_s, configDir + u"/ariadne/config.lua"_s);
     ariadne::FileManagerService fileManager(ariadne);
     if (shared && !fileManager.registerOnBus()) {
         // Another one started meanwhile.

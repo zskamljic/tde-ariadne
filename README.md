@@ -12,7 +12,8 @@ The PKGBUILDs live in [`packaging/arch`](packaging/arch).
 
 ## Building
 
-Needs a C++23 compiler, CMake ≥ 3.28, Qt ≥ 6.8 (base) and Lua 5.4 or 5.5.
+Needs a C++23 compiler, CMake ≥ 3.28, Qt ≥ 6.8 (base) and [libtde](https://github.com/zskamljic/libtde),
+installed or checked out next to this repository (then it is built along).
 At runtime, UDisks2 is used for mounting drives and unlocking encrypted ones, and gvfs (with
 `gio` and its MTP and SMB backends) for phones, cameras and network shares, if they are installed.
 
@@ -48,13 +49,17 @@ installed and unused. To go back, remove the two files above and run
 
 ## Configuration
 
-Configuration is Lua, in `~/.config/tde`:
+Configuration is Lua, in `~/.config/tde`. Changes apply to open windows as soon as a file
+is saved.
 
 - `config.lua` holds desktop-wide settings shared by all TDE applications: window button
-  placement and order, theme (`arc-dark`, `arc` or `system`), corner radius, icon theme
-  and colour overrides. See [`data/tde/config.lua`](data/tde/config.lua).
+  placement and order, theme (`arc-dark`, `arc` or `system`), corner radius, icon theme,
+  colour overrides and the terminal. It is described with
+  [libtde](https://github.com/zskamljic/libtde).
 - `ariadne/config.lua` holds Ariadne's own defaults: view mode, sorting, hidden files,
-  icon sizes and per-MIME-type icon overrides. See [`data/ariadne/config.lua`](data/ariadne/config.lua).
+  icon sizes, per-MIME-type icon overrides, and custom actions: your own commands in the
+  context menu, for the file types you choose, optionally with a shortcut. See
+  [`data/ariadne/config.lua`](data/ariadne/config.lua).
 - `ariadne/state.lua` is written by Ariadne to remember changes made in its windows (zoom,
   hidden files, window and sidebar size, the default view). Editing `ariadne/config.lua`
   afterwards makes its settings win again.
@@ -70,6 +75,14 @@ Xfce Terminal) are told the folder explicitly; others start in it as their worki
 Thumbnails follow the freedesktop.org thumbnail spec and share `~/.cache/thumbnails` with
 other file managers. Images are scaled by Ariadne itself; other files (PDFs, videos, …) use
 the thumbnailers installed in `/usr/share/thumbnailers`.
+
+Archives (zip, tarballs, 7z, rar, ISO images and whatever else libarchive reads) open like
+folders, read-only: open or copy what is in them, or extract all or part of them. "Open With"
+still offers the archive manager, and `archives_as_folders = false` in the config makes that
+the default again.
+
+The sidebar shows how full each drive is; Properties shows a folder's free space, and changes
+permissions for one item or several, or for everything inside a folder.
 
 Bookmarks are shared with GTK file choosers through `~/.config/gtk-3.0/bookmarks`.
 Drag a folder onto the sidebar to bookmark it; drag bookmarks to reorder them.

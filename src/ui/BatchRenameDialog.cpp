@@ -1,7 +1,7 @@
 #include "BatchRenameDialog.hpp"
 
-#include "Dialog.hpp"
-#include "Theme.hpp"
+#include <tde/Dialog.hpp>
+#include <tde/Theme.hpp>
 
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -19,7 +19,7 @@ namespace ariadne {
 
 std::optional<std::vector<batchrename::Plan>> askBatchRename(QWidget* parent, const QStringList& paths)
 {
-    Dialog dialog(u"Rename %1 Items"_s.arg(paths.size()), parent);
+    tde::Dialog dialog(u"Rename %1 Items"_s.arg(paths.size()), parent);
 
     auto* find = new QLineEdit;
     find->setPlaceholderText(u"Text to find"_s);
@@ -66,8 +66,8 @@ std::optional<std::vector<batchrename::Plan>> askBatchRename(QWidget* parent, co
 
         int changing = 0;
         int problems = 0;
-        const QColor dim = theme::colors().dimText;
-        const QColor error = theme::colors().error;
+        const QColor dim = tde::theme::colors().dimText;
+        const QColor error = tde::theme::colors().error;
         for (const batchrename::Plan& plan : plans) {
             auto* row = new QTreeWidgetItem(preview, {plan.oldName, plan.changes() ? plan.newName : u"(unchanged)"_s});
             if (!plan.changes()) {

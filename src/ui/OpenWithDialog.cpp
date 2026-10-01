@@ -1,8 +1,9 @@
 #include "OpenWithDialog.hpp"
 
-#include "Dialog.hpp"
-#include "Theme.hpp"
 #include "core/Applications.hpp"
+
+#include <tde/Dialog.hpp>
+#include <tde/Theme.hpp>
 
 #include <QCheckBox>
 #include <QDialogButtonBox>
@@ -32,7 +33,7 @@ QListWidgetItem* addHeading(QListWidget* list, const QString& text)
 void addApp(QListWidget* list, const DesktopApp* app)
 {
     // Scale small icons up, so every row lines up the same.
-    const QIcon icon = theme::themeIcon({app->iconName, u"application-x-executable"_s});
+    const QIcon icon = tde::theme::themeIcon({app->iconName, u"application-x-executable"_s});
     const qreal scale = list->devicePixelRatioF();
     const QSize size = list->iconSize() * scale;
     QPixmap pixmap = icon.pixmap(list->iconSize(), scale);
@@ -50,7 +51,7 @@ void addApp(QListWidget* list, const DesktopApp* app)
 std::optional<OpenWithChoice> chooseApplication(QWidget* parent, const Applications& applications,
     const QString& mimeType, const QString& typeDescription, const QString& fileName)
 {
-    Dialog dialog(u"Open With"_s, parent);
+    tde::Dialog dialog(u"Open With"_s, parent);
     auto* prompt = new QLabel(u"Choose an application to open “%1”."_s.arg(fileName));
     prompt->setWordWrap(true);
     auto* search = new QLineEdit;

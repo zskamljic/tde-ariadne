@@ -15,7 +15,17 @@ option(ARIADNE_SANITIZE "Build with address and undefined behaviour sanitizers" 
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets DBus Concurrent)
 find_package(PkgConfig REQUIRED)
-pkg_search_module(LUA REQUIRED IMPORTED_TARGET lua lua5.5 lua-5.5 lua5.4 lua-5.4 lua54)
+pkg_search_module(ARCHIVE REQUIRED IMPORTED_TARGET libarchive)
+# libtde as installed; for working on both, a checkout next to this one is used instead.
+find_package(Tde 0.1 QUIET)
+if(NOT Tde_FOUND)
+    if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../libtde/CMakeLists.txt)
+        message(STATUS "Using libtde from ${CMAKE_CURRENT_SOURCE_DIR}/../libtde")
+        add_subdirectory(../libtde ${CMAKE_CURRENT_BINARY_DIR}/libtde EXCLUDE_FROM_ALL)
+    else()
+        message(FATAL_ERROR "libtde was not found: install it, or check it out next to Ariadne.")
+    endif()
+endif()
 
 qt_standard_project_setup()
 # Only system libraries are linked, so installed binaries need no RPATH.
@@ -34,6 +44,7 @@ add_library(ariadne-core STATIC
     src/core/Bookmarks.cpp
     src/core/ClipboardFormat.cpp
     src/core/Config.cpp
+    src/core/CustomActions.cpp
     src/core/DefaultFileManager.cpp
     src/core/DeviceMonitor.cpp
     src/core/DirectoryListing.cpp
@@ -44,26 +55,22 @@ add_library(ariadne-core STATIC
     src/core/Terminal.cpp
     src/core/Thumbnailer.cpp
     src/core/Transfer.cpp
-    src/tde/DesktopConfig.cpp
-    src/tde/LuaConfig.cpp
 )
 target_include_directories(ariadne-core PUBLIC src)
 target_link_libraries(ariadne-core
-    PUBLIC Qt6::Core Qt6::Gui Qt6::DBus Qt6::Concurrent
-    PRIVATE PkgConfig::LUA)
+    PUBLIC Qt6::Core Qt6::Gui Qt6::DBus Qt6::Concurrent Tde::Tde
+    PRIVATE PkgConfig::ARCHIVE)
 
 add_library(ariadne-ui STATIC
     src/ui/Application.cpp
     src/ui/BatchRenameDialog.cpp
-    src/ui/Dialog.cpp
+    src/ui/Dialogs.cpp
     src/ui/DirectoryModel.cpp
     src/ui/DragDrop.cpp
     src/ui/FileSortProxy.cpp
     src/ui/FileManagerService.cpp
     src/ui/FileView.cpp
-    src/ui/FramelessHelper.cpp
     src/ui/GridView.cpp
-    src/ui/HeaderBar.cpp
     src/ui/Jobs.cpp
     src/ui/JobsButton.cpp
     src/ui/MainWindow.cpp
@@ -71,9 +78,7 @@ add_library(ariadne-ui STATIC
     src/ui/PathBar.cpp
     src/ui/PropertiesDialog.cpp
     src/ui/Sidebar.cpp
-    src/ui/Theme.cpp
-    src/ui/Toast.cpp
-    src/ui/WindowButtons.cpp
+    src/ui/StyleSheet.cpp
 )
 target_link_libraries(ariadne-ui PUBLIC ariadne-core Qt6::Widgets Qt6::Concurrent)
 
@@ -91,9 +96,7 @@ install(FILES ${CMAKE_CURRENT_BINARY_DIR}/io.github.zskamljic.Ariadne.service
     DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/services)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.freedesktop.FileManager1.service
     DESTINATION ${CMAKE_INSTALL_DATADIR}/ariadne)
-# Example configs, laid out like ~/.config/tde. The desktop-wide one belongs to all of TDE,
-# so it is kept out of shared locations that a future common package would own.
-install(FILES data/tde/config.lua DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples/tde)
+# The example config, laid out like ~/.config/tde. The desktop-wide one comes with libtde.
 install(FILES data/ariadne/config.lua DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples/tde/ariadne)
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})
 

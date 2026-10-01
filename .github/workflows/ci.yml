@@ -17,6 +17,9 @@ jobs:
           pacman -Syu --noconfirm --needed
           gcc pkgconf cmake ninja git qt6-base qt6-svg lua libarchive shared-mime-info
       - uses: actions/checkout@v4
+      # Built along with Ariadne from a checkout next to it.
+      - name: Fetch libtde
+        run: git clone --depth 1 https://github.com/zskamljic/libtde.git ../libtde
       - name: Configure
         run: cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Debug
       - name: Build

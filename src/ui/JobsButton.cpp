@@ -1,7 +1,8 @@
 #include "JobsButton.hpp"
 
 #include "Jobs.hpp"
-#include "Theme.hpp"
+
+#include <tde/Theme.hpp>
 
 #include <QFrame>
 #include <QLabel>
@@ -49,7 +50,7 @@ public:
 
         QToolButton* cancel = new QToolButton(this);
         cancel->setObjectName(u"HeaderButton"_s);
-        cancel->setIcon(theme::symbolicIcon(u"process-stop"_s));
+        cancel->setIcon(tde::theme::symbolicIcon(u"process-stop"_s));
         cancel->setToolTip(u"Cancel"_s);
         connect(cancel, &QToolButton::clicked, this, [this] {
             if (m_job)
@@ -102,9 +103,9 @@ protected:
     {
         QPainter painter(this);
         painter.setRenderHint(QPainter::Antialiasing);
-        painter.setPen(QPen(theme::colors().border, 1));
-        painter.setBrush(theme::colors().base);
-        const qreal radius = theme::radius(theme::RadiusSize::Large);
+        painter.setPen(QPen(tde::theme::colors().border, 1));
+        painter.setBrush(tde::theme::colors().base);
+        const qreal radius = tde::theme::radius(tde::theme::RadiusSize::Large);
         painter.drawRoundedRect(QRectF(rect()).adjusted(0.5, 0.5, -0.5, -0.5), radius, radius);
     }
 };
@@ -155,11 +156,11 @@ void JobsButton::paintEvent(QPaintEvent* event)
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing);
     const QRectF ring = QRectF(0, 0, 16, 16).translated(rect().center() - QPointF(8, 8));
-    QColor track = theme::colors().text;
+    QColor track = tde::theme::colors().text;
     track.setAlphaF(0.25f);
     painter.setPen(QPen(track, 2.5));
     painter.drawEllipse(ring);
-    painter.setPen(QPen(theme::colors().accent, 2.5, Qt::SolidLine, Qt::RoundCap));
+    painter.setPen(QPen(tde::theme::colors().accent, 2.5, Qt::SolidLine, Qt::RoundCap));
     painter.drawArc(ring, 90 * 16, -int(fraction() * 360 * 16));
 }
 

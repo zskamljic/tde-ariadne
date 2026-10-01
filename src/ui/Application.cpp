@@ -3,7 +3,11 @@
 #include "MainWindow.hpp"
 #include "core/Location.hpp"
 
+#include <tde/Theme.hpp>
+
+#include <QApplication>
 #include <QFileInfo>
+#include <QStyleHints>
 
 #include <cstdio>
 #include <print>
@@ -48,6 +52,51 @@ void Application::saveState()
     m_saveTimer.stop();
     if (!ariadne::saveState(m_config, m_statePath))
         std::println(stderr, "ariadne: could not save settings to {}", m_statePath.toStdString());
+}
+
+void Application::watchConfig(const QString& desktopConfigPath, const QString& configPath)
+{
+    m_configPath = configPath;
+    m_configWatcher = std::make_unique<tde::ConfigWatcher>(QStringList {desktopConfigPath, configPath});
+    connect(m_configWatcher.get(), &tde::ConfigWatcher::changed, this, [this, desktopConfigPath](const QString& path) {
+        if (path == desktopConfigPath)
+            reloadDesktopConfig(path);
+        else
+            reloadConfig();
+    });
+    // The "system" theme follows the desktop between light and dark.
+    connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this, [this] {
+        if (tde::desktop().appearance.theme == u"system")
+            applyDesktopConfig();
+    });
+}
+
+void Application::reloadDesktopConfig(const QString& path)
+{
+    tde::DesktopConfig fresh = tde::loadDesktopConfig(path);
+    if (fresh == tde::desktop())
+        return;
+    tde::setDesktop(std::move(fresh));
+    applyDesktopConfig();
+}
+
+void Application::applyDesktopConfig()
+{
+    tde::theme::apply(*qApp, tde::desktop().appearance);
+    for (const auto& window : m_windows)
+        window->applyDesktopConfig();
+}
+
+void Application::reloadConfig()
+{
+    Config fresh = loadConfig(m_configPath, m_statePath);
+    // Window sizes are what the windows were last left at; the config only starts them off.
+    fresh.window = m_config.window;
+    if (fresh == m_config)
+        return;
+    m_config = std::move(fresh);
+    for (const auto& window : m_windows)
+        window->applyConfig(m_config);
 }
 
 namespace {
