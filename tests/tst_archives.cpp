@@ -124,6 +124,53 @@ private slots:
         QVERIFY(!result.error().isEmpty());
         QVERIFY(QDir(out).isEmpty()); // nothing left behind
     }
+
+    void listsInside()
+    {
+        // Folder entries of their own (zip), only files (tar of named files), and "./" names.
+        const QString zip = m_dir.filePath(u"browse.zip"_s);
+        pack(zip, m_dir.filePath(u"src"_s), {u"project"_s, u"loose1.txt"_s});
+        const QString filesOnly = m_dir.filePath(u"files-only.tar"_s);
+        pack(filesOnly, m_dir.filePath(u"src"_s), {u"project/code/main.cpp"_s, u"loose2.txt"_s});
+        const QString dotted = m_dir.filePath(u"dotted.tar.gz"_s);
+        pack(dotted, m_dir.filePath(u"src/project"_s), {u"."_s});
+
+        const auto names = [](const std::expected<std::vector<archives::Entry>, QString>& entries) {
+            QStringList result;
+            for (const archives::Entry& entry : entries.value())
+                result << entry.path.section(u'/', -1) + (entry.isDir ? u"/"_s : QString());
+            result.sort();
+            return result;
+        };
+        QCOMPARE(names(archives::list(zip, {})), (QStringList {u"loose1.txt"_s, u"project/"_s}));
+        QCOMPARE(names(archives::list(zip, u"project"_s)), (QStringList {u"code/"_s, u"readme.txt"_s}));
+        QCOMPARE(names(archives::list(filesOnly, {})), (QStringList {u"loose2.txt"_s, u"project/"_s}));
+        QCOMPARE(names(archives::list(filesOnly, u"project"_s)), QStringList {u"code/"_s});
+        QCOMPARE(names(archives::list(filesOnly, u"project/code"_s)), QStringList {u"main.cpp"_s});
+        QCOMPARE(names(archives::list(dotted, {})), (QStringList {u"code/"_s, u"readme.txt"_s}));
+
+        QVERIFY(!archives::list(m_dir.filePath(u"src/loose1.txt"_s), {}));
+    }
+
+    void extractsSome()
+    {
+        const QString filesOnly = m_dir.filePath(u"files-only.tar"_s);
+        const QString dotted = m_dir.filePath(u"dotted.tar.gz"_s);
+        const QString out = m_dir.filePath(u"some"_s);
+
+        // A file from a folder, without the folders above it.
+        QVERIFY(archives::extractPaths(filesOnly, {u"project/code/main.cpp"_s}, out));
+        QVERIFY(QFileInfo(out + u"/main.cpp"_s).isFile());
+        // A folder that is only implied by what is in it, with its contents.
+        QVERIFY(archives::extractPaths(filesOnly, {u"project/code"_s}, out + u"/2"_s));
+        QVERIFY(QFileInfo(out + u"/2/code/main.cpp"_s).isFile());
+        // Names stored with "./".
+        QVERIFY(archives::extractPaths(dotted, {u"code"_s, u"readme.txt"_s}, out + u"/3"_s));
+        QVERIFY(QFileInfo(out + u"/3/code/main.cpp"_s).isFile());
+        QVERIFY(QFileInfo(out + u"/3/readme.txt"_s).isFile());
+
+        QVERIFY(!archives::extractPaths(dotted, {u"missing.txt"_s}, out + u"/4"_s));
+    }
 };
 
 QTEST_GUILESS_MAIN(TestArchives)

@@ -1,6 +1,8 @@
 #include "core/Location.hpp"
 
 #include <QDir>
+#include <QFile>
+#include <QTemporaryDir>
 #include <QTest>
 
 using namespace Qt::StringLiterals;
@@ -73,6 +75,42 @@ private slots:
 
         QCOMPARE(location::crumbs(location::root()).size(), 1u);
         QCOMPARE(location::crumbs(location::child(location::trash(), u"x"_s)).size(), 2u);
+    }
+
+    void archives()
+    {
+        QTemporaryDir dir;
+        const QString zip = dir.filePath(u"photos.zip"_s);
+        QFile file(zip);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.close();
+
+        const QUrl top = location::archiveRoot(zip);
+        QCOMPARE(top.toString(), u"archive://"_s + zip);
+        QVERIFY(location::isArchive(top));
+        QVERIFY(!location::isLocal(top));
+        const QUrl inner = location::child(location::child(top, u"2024"_s), u"summer"_s);
+        const auto place = location::archivePlace(inner);
+        QVERIFY(place);
+        QCOMPARE(place->file, zip);
+        QCOMPARE(place->inside, u"2024/summer"_s);
+        QCOMPARE(location::displayName(inner), u"summer"_s);
+        QVERIFY(location::isAncestorOf(top, inner));
+
+        // Up from the top of an archive is the folder it is in.
+        QCOMPARE(location::parent(inner), location::child(top, u"2024"_s));
+        QCOMPARE(location::parent(top), location::fromLocalPath(dir.path()));
+
+        // Shown in the path bar with the archive as one step, and typed back in.
+        const auto crumbs = location::crumbs(inner);
+        QCOMPARE(crumbs.at(crumbs.size() - 3).label, u"photos.zip"_s);
+        QCOMPARE(crumbs.at(crumbs.size() - 3).url, top);
+        QCOMPARE(crumbs.back().url, inner);
+        QCOMPARE(location::fromUserInput(location::editableText(inner), location::home()), inner);
+        QCOMPARE(location::fromUserInput(location::editableText(top), location::home()), top);
+        // The archive itself, without a slash, is still the file.
+        QCOMPARE(location::fromUserInput(zip, location::home()), location::fromLocalPath(zip));
+        QCOMPARE(location::fromUserInput(u"2024"_s, top), location::child(top, u"2024"_s));
     }
 };
 

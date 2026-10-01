@@ -6,8 +6,10 @@
 #include <optional>
 #include <vector>
 
-// Locations are URLs: file:///path for the local file system and trash:///sub/dir for the
-// home trash. All functions return normalized URLs, so they can be compared with ==.
+// Locations are URLs: file:///path for the local file system, trash:///sub/dir for the home
+// trash, and archive:///path/to/photos.zip/sub/dir for what is inside an archive (the path
+// goes on through the archive file). All functions return normalized URLs, so they can be
+// compared with ==.
 namespace ariadne::location {
 
 struct Crumb {
@@ -22,9 +24,19 @@ QUrl root();
 QUrl fromLocalPath(const QString& path);
 
 bool isTrash(const QUrl& url);
+bool isArchive(const QUrl& url);
+// The top of the archive at `archivePath`, shown as a folder.
+QUrl archiveRoot(const QString& archivePath);
+// Where an archive location is: the archive file, and the folder inside it ("" for the top).
+struct ArchivePlace {
+    QString file;
+    QString inside;
+};
+std::optional<ArchivePlace> archivePlace(const QUrl& url);
 bool isLocal(const QUrl& url);
 
-// The directory on disk that holds the contents of `url`.
+// The directory on disk that holds the contents of `url`. Inside an archive, the path its
+// contents would have, which is not on disk.
 QString localPath(const QUrl& url);
 QString trashFilesPath();
 

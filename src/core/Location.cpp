@@ -11,6 +11,28 @@ namespace ariadne::location {
 namespace {
 
 constexpr auto TrashScheme = "trash"_L1;
+constexpr auto ArchiveScheme = "archive"_L1;
+
+QUrl makeArchiveUrl(const QString& path)
+{
+    QUrl url;
+    url.setScheme(ArchiveScheme);
+    url.setHost(u""_s);
+    url.setPath(QDir::cleanPath(path));
+    return url;
+}
+
+// The archive file a path goes through: the first part of it that is a file on disk.
+std::optional<std::pair<QString, QString>> splitAtFile(const QString& path)
+{
+    for (qsizetype slash = path.indexOf(u'/', 1);; slash = path.indexOf(u'/', slash + 1)) {
+        const QString prefix = slash < 0 ? path : path.left(slash);
+        if (QFileInfo(prefix).isFile())
+            return std::pair {prefix, slash < 0 ? QString() : path.mid(slash + 1)};
+        if (slash < 0)
+            return std::nullopt;
+    }
+}
 
 QUrl makeTrashUrl(const QString& relative)
 {
@@ -67,6 +89,26 @@ bool isTrash(const QUrl& url)
     return url.scheme() == TrashScheme;
 }
 
+bool isArchive(const QUrl& url)
+{
+    return url.scheme() == ArchiveScheme;
+}
+
+QUrl archiveRoot(const QString& archivePath)
+{
+    return makeArchiveUrl(archivePath);
+}
+
+std::optional<ArchivePlace> archivePlace(const QUrl& url)
+{
+    if (!isArchive(url))
+        return std::nullopt;
+    const auto split = splitAtFile(url.path());
+    if (!split)
+        return std::nullopt;
+    return ArchivePlace {split->first, split->second};
+}
+
 bool isLocal(const QUrl& url)
 {
     return url.isLocalFile();
@@ -83,6 +125,8 @@ QString localPath(const QUrl& url)
         const QString relative = trashRelative(url);
         return relative.isEmpty() ? trashFilesPath() : joinPath(trashFilesPath(), relative);
     }
+    if (isArchive(url))
+        return url.path();
     return QDir::cleanPath(url.toLocalFile());
 }
 
@@ -92,6 +136,8 @@ QUrl child(const QUrl& directory, const QString& name)
         const QString relative = trashRelative(directory);
         return makeTrashUrl(relative.isEmpty() ? name : relative + u'/' + name);
     }
+    if (isArchive(directory))
+        return makeArchiveUrl(joinPath(directory.path(), name));
     return fromLocalPath(joinPath(localPath(directory), name));
 }
 
@@ -103,6 +149,14 @@ std::optional<QUrl> parent(const QUrl& url)
             return std::nullopt;
         const qsizetype slash = relative.lastIndexOf(u'/');
         return makeTrashUrl(slash < 0 ? QString() : relative.left(slash));
+    }
+    // From the top of an archive, up is the folder the archive is in.
+    if (isArchive(url)) {
+        const auto place = archivePlace(url);
+        const QString path = url.path();
+        if (!place || place->inside.isEmpty())
+            return fromLocalPath(QFileInfo(place ? place->file : path).absolutePath());
+        return makeArchiveUrl(path.left(path.lastIndexOf(u'/')));
     }
 
     const QString path = localPath(url);
@@ -142,7 +196,9 @@ QString editableText(const QUrl& url)
     if (isTrash(url))
         return u"trash:///"_s + trashRelative(url);
 
-    const QString path = localPath(url);
+    // The top of an archive keeps a slash, which makes it a folder when typed in again.
+    const auto place = archivePlace(url);
+    const QString path = localPath(url) + (place && place->inside.isEmpty() ? u"/"_s : QString());
     const QString home = homePath();
     if (path == home)
         return u"~"_s;
@@ -151,11 +207,30 @@ QString editableText(const QUrl& url)
     return path;
 }
 
+namespace {
+
+// A path typed in: a folder, a file, or somewhere inside an archive file ("~/a.zip/" for the
+// top of it, as a trailing slash makes a file a folder).
+QUrl fromTypedPath(const QString& path)
+{
+    const QFileInfo info(path);
+    const bool asFolder = path.endsWith(u'/') && path.size() > 1;
+    if (info.exists() && !(asFolder && info.isFile()))
+        return fromLocalPath(path);
+    if (splitAtFile(QDir::cleanPath(path)))
+        return makeArchiveUrl(path);
+    return fromLocalPath(path);
+}
+
+} // namespace
+
 std::optional<QUrl> fromUserInput(const QString& text, const QUrl& current)
 {
     const QString input = text.trimmed();
     if (input.isEmpty())
         return std::nullopt;
+    if (input.startsWith(u"archive:", Qt::CaseInsensitive))
+        return makeArchiveUrl(QUrl(input).path());
 
     if (input.startsWith(u"trash:", Qt::CaseInsensitive))
         return makeTrashUrl(input.mid(6));
@@ -168,16 +243,18 @@ std::optional<QUrl> fromUserInput(const QString& text, const QUrl& current)
     if (input == u"~")
         return home();
     if (input.startsWith(u"~/"))
-        return fromLocalPath(homePath() + input.mid(1));
+        return fromTypedPath(homePath() + input.mid(1));
     if (QDir::isAbsolutePath(input))
-        return fromLocalPath(input);
+        return fromTypedPath(input);
 
     // A relative path, or some URL scheme we cannot handle yet.
     if (input.contains(u"://"))
         return std::nullopt;
     if (isTrash(current))
         return makeTrashUrl(trashRelative(current) + u'/' + input);
-    return fromLocalPath(joinPath(localPath(current), input));
+    if (isArchive(current))
+        return makeArchiveUrl(joinPath(current.path(), input));
+    return fromTypedPath(joinPath(localPath(current), input));
 }
 
 std::vector<Crumb> crumbs(const QUrl& url)
@@ -190,6 +267,19 @@ std::vector<Crumb> crumbs(const QUrl& url)
         for (const QString& part : trashRelative(url).split(u'/', Qt::SkipEmptyParts)) {
             accumulated = accumulated.isEmpty() ? part : accumulated + u'/' + part;
             result.push_back({part, {}, makeTrashUrl(accumulated)});
+        }
+        return result;
+    }
+
+    // Inside an archive: the way to the archive file, the archive, then the folders in it.
+    if (const auto place = archivePlace(url)) {
+        result = crumbs(fromLocalPath(QFileInfo(place->file).absolutePath()));
+        const QUrl top = archiveRoot(place->file);
+        result.push_back({QFileInfo(place->file).fileName(), u"package-x-generic"_s, top});
+        QUrl accumulated = top;
+        for (const QString& part : place->inside.split(u'/', Qt::SkipEmptyParts)) {
+            accumulated = child(accumulated, part);
+            result.push_back({part, {}, accumulated});
         }
         return result;
     }
