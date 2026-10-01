@@ -1,7 +1,8 @@
 #include "GridView.hpp"
 
 #include "DirectoryModel.hpp"
-#include "Theme.hpp"
+
+#include <tde/Theme.hpp>
 
 #include <QAbstractItemView>
 #include <QFileInfo>
@@ -66,7 +67,7 @@ void paintThumbnail(QPainter* painter, const QRect& box, const QPixmap& pixmap)
     QRectF target(QPointF(), size);
     target.moveCenter(QRectF(box).center());
 
-    const qreal radius = theme::radius(theme::RadiusSize::Small);
+    const qreal radius = tde::theme::radius(tde::theme::RadiusSize::Small);
     QPainterPath shape;
     shape.addRoundedRect(target, radius, radius);
     painter->save();
@@ -75,7 +76,7 @@ void paintThumbnail(QPainter* painter, const QRect& box, const QPixmap& pixmap)
     painter->drawPixmap(target, pixmap, pixmap.rect());
     painter->restore();
 
-    QColor frame = theme::colors().text;
+    QColor frame = tde::theme::colors().text;
     frame.setAlphaF(0.25f);
     painter->setPen(QPen(frame, 1));
     painter->setBrush(Qt::NoBrush);
@@ -157,7 +158,7 @@ bool GridDelegate::hitTest(const QStyleOptionViewItem& option, const QModelIndex
 
 void GridDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, const QModelIndex& index) const
 {
-    const auto& colors = theme::colors();
+    const auto& colors = tde::theme::colors();
     const bool selected = option.state & QStyle::State_Selected;
     const bool hovered = option.state & QStyle::State_MouseOver;
     const ItemLayout item = layout(option, index);
@@ -173,16 +174,16 @@ void GridDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, 
         if (selected)
             highlight.setAlpha(70);
         QPainterPath path;
-        path.addRoundedRect(
-            QRectF(iconArea), theme::radius(theme::RadiusSize::Large), theme::radius(theme::RadiusSize::Large));
+        path.addRoundedRect(QRectF(iconArea), tde::theme::radius(tde::theme::RadiusSize::Large),
+            tde::theme::radius(tde::theme::RadiusSize::Large));
         painter->fillPath(path, highlight);
     }
 
-    if (option.widget && option.widget->property("dropRow").toInt() == index.row()
-        && option.widget->property("dropRow").isValid()) {
+    if (option.widget && !option.widget->property("dropTarget").toString().isEmpty()
+        && option.widget->property("dropTarget").toString() == index.data(DirectoryModel::PathRole).toString()) {
         painter->setPen(QPen(colors.accent, 2));
         painter->setBrush(Qt::NoBrush);
-        const qreal radius = theme::radius(theme::RadiusSize::Large);
+        const qreal radius = tde::theme::radius(tde::theme::RadiusSize::Large);
         painter->drawRoundedRect(QRectF(iconArea).adjusted(1, 1, -1, -1), radius, radius);
     }
 
@@ -198,7 +199,7 @@ void GridDelegate::paint(QPainter* painter, const QStyleOptionViewItem& option, 
     const QFontMetrics metrics(option.font);
     if (selected) {
         QPainterPath path;
-        path.addRoundedRect(QRectF(textRect), theme::radius(), theme::radius());
+        path.addRoundedRect(QRectF(textRect), tde::theme::radius(), tde::theme::radius());
         painter->setOpacity(1.0);
         painter->fillPath(path, colors.accent);
     }

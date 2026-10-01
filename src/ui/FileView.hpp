@@ -3,6 +3,8 @@
 #include "core/Config.hpp"
 
 #include <QModelIndex>
+#include <QPointer>
+#include <QTimer>
 #include <QWidget>
 
 class QAbstractItemModel;
@@ -28,6 +30,8 @@ public:
     ViewMode mode() const { return m_mode; }
     void setMode(ViewMode mode);
     void setIconSizes(int grid, int list);
+    // Whether the list view shows folders with an arrow that opens them in place.
+    void setExpandableFolders(bool expandable);
     void zoom(int steps);
 
     QAbstractItemView* currentView() const;
@@ -66,7 +70,12 @@ private:
     void setupView(QAbstractItemView* view);
     void placeStatus();
     bool handleDrag(QAbstractItemView* view, QDropEvent* event);
-    static void setDropRow(QAbstractItemView* view, int row);
+    // Scrolls while a drag hovers near the top or bottom edge, so files can reach folders
+    // out of sight.
+    void updateAutoScroll(QAbstractItemView* view, const QPoint& position, const QStringList& paths);
+    void autoScroll();
+    void stopAutoScroll();
+    static void setDropTarget(QAbstractItemView* view, const QString& path);
 
     QStackedWidget* m_stack;
     GridView* m_grid;
@@ -77,6 +86,11 @@ private:
     QLabel* m_status;
     ViewMode m_mode = ViewMode::Grid;
     QString m_dropDirectory;
+    QTimer m_autoScrollTimer;
+    QPointer<QAbstractItemView> m_autoScrollView;
+    QPoint m_dragPosition;
+    double m_autoScrollPixels = 0; // scrolled but not yet applied
+    QStringList m_draggedPaths;
     bool m_dropIntoTrash = false;
     int m_listIconSize = 24;
 };

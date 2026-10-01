@@ -3,7 +3,8 @@
 #include "DirectoryModel.hpp"
 #include "DragDrop.hpp"
 #include "GridView.hpp"
-#include "Theme.hpp"
+
+#include <tde/Theme.hpp>
 
 #include <QApplication>
 #include <QDropEvent>
@@ -14,6 +15,7 @@
 #include <QLineEdit>
 #include <QMouseEvent>
 #include <QPainter>
+#include <QScrollBar>
 #include <QStackedWidget>
 #include <QStyledItemDelegate>
 #include <QTimer>
@@ -41,12 +43,16 @@ template <std::size_t N> int stepZoom(const std::array<int, N>& levels, int curr
     return levels[static_cast<std::size_t>(index)];
 }
 
-// The row files would be dropped into, as marked on the view by FileView.
-constexpr const char* DropRowProperty = "dropRow";
+// The folder files would be dropped into, as marked on the view by FileView: by path, as
+// rows repeat at every level of expanded folders.
+constexpr const char* DropTargetProperty = "dropTarget";
 
 bool isDropTarget(const QStyleOptionViewItem& option, const QModelIndex& index)
 {
-    return option.widget && option.widget->property(DropRowProperty).toInt() == index.row();
+    if (!option.widget)
+        return false;
+    const QString target = option.widget->property(DropTargetProperty).toString();
+    return !target.isEmpty() && target == index.data(DirectoryModel::PathRole).toString();
 }
 
 // The list view's delegate: shows the full name as a tooltip when it does not fit.
@@ -85,7 +91,7 @@ public:
         if (isDropTarget(option, index)) {
             painter->save();
             painter->setRenderHint(QPainter::Antialiasing);
-            painter->setPen(QPen(theme::colors().accent, 2));
+            painter->setPen(QPen(tde::theme::colors().accent, 2));
             // One outline around the whole row: only its first and last cells draw their ends.
             const QRectF rect = QRectF(option.rect).adjusted(1, 1, -1, -1);
             painter->drawLine(rect.topLeft(), rect.topRight());
@@ -130,9 +136,13 @@ FileView::FileView(QAbstractItemModel* model, QWidget* parent)
     layout->setContentsMargins(0, 0, 0, 0);
     layout->addWidget(m_stack);
 
+    m_autoScrollTimer.setInterval(30);
+    connect(&m_autoScrollTimer, &QTimer::timeout, this, &FileView::autoScroll);
+
     m_list->setObjectName(u"ListView"_s);
-    m_list->setRootIsDecorated(false);
-    m_list->setItemsExpandable(false);
+    // Double-clicking a folder opens it, as in the grid; its arrow (or Right) expands it.
+    m_list->setExpandsOnDoubleClick(false);
+    m_list->setIndentation(20);
     m_list->setUniformRowHeights(true);
     m_list->setAllColumnsShowFocus(true);
     m_list->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -216,7 +226,7 @@ void FileView::setupView(QAbstractItemView* view)
     view->setAcceptDrops(true);
     view->viewport()->setAcceptDrops(true);
     view->setDropIndicatorShown(false);
-    view->setProperty(DropRowProperty, -1);
+    view->setProperty(DropTargetProperty, QString());
     view->setContextMenuPolicy(Qt::CustomContextMenu);
     view->viewport()->installEventFilter(this);
     connect(view, &QAbstractItemView::activated, this, &FileView::activated);
@@ -248,6 +258,12 @@ void FileView::setIconSizes(int grid, int list)
     m_listIconSize = list;
     m_list->setIconSize(QSize(list, list));
     emit iconSizesChanged(grid, list);
+}
+
+void FileView::setExpandableFolders(bool expandable)
+{
+    m_list->setRootIsDecorated(expandable);
+    m_list->setItemsExpandable(expandable);
 }
 
 void FileView::zoom(int steps)
@@ -303,7 +319,7 @@ void FileView::setPlaceholder(const QString& iconName, const QString& text)
     {
         QPainter painter(&pixmap);
         painter.setOpacity(0.5);
-        theme::symbolicIcon(iconName).paint(&painter, QRect(0, 0, size, size));
+        tde::theme::symbolicIcon(iconName).paint(&painter, QRect(0, 0, size, size));
     }
     m_placeholderIcon->setPixmap(pixmap);
     m_placeholderText->setText(text);
@@ -339,11 +355,74 @@ void FileView::setDropDirectory(const QString& path, bool isTrash)
     m_dropIntoTrash = isTrash;
 }
 
-void FileView::setDropRow(QAbstractItemView* view, int row)
+namespace {
+
+constexpr int AutoScrollMargin = 40;
+
+} // namespace
+
+void FileView::updateAutoScroll(QAbstractItemView* view, const QPoint& position, const QStringList& paths)
 {
-    if (view->property(DropRowProperty).toInt() == row)
+    m_autoScrollView = view;
+    m_dragPosition = position;
+    m_draggedPaths = paths;
+    const int height = view->viewport()->height();
+    const bool nearEdge = position.y() < AutoScrollMargin || position.y() > height - AutoScrollMargin;
+    if (nearEdge && !m_autoScrollTimer.isActive())
+        m_autoScrollTimer.start();
+    else if (!nearEdge)
+        m_autoScrollTimer.stop();
+}
+
+void FileView::autoScroll()
+{
+    QAbstractItemView* view = m_autoScrollView;
+    if (!view) {
+        stopAutoScroll();
         return;
-    view->setProperty(DropRowProperty, row);
+    }
+    // Faster the closer to the edge: up to a few rows a second at the very edge.
+    const int height = view->viewport()->height();
+    const int y = m_dragPosition.y();
+    int step = 0;
+    if (y < AutoScrollMargin)
+        step = -(AutoScrollMargin - y);
+    else if (y > height - AutoScrollMargin)
+        step = y - (height - AutoScrollMargin);
+    m_autoScrollPixels += step / 2.0 + (step > 0 ? 1 : step < 0 ? -1 : 0);
+    // The list scrolls by rows: whole rows once enough pixels have added up.
+    int amount = static_cast<int>(m_autoScrollPixels);
+    if (view->verticalScrollMode() == QAbstractItemView::ScrollPerItem) {
+        const int rowHeight = std::max(1, view->sizeHintForRow(0));
+        amount = static_cast<int>(m_autoScrollPixels / rowHeight);
+        m_autoScrollPixels -= amount * rowHeight;
+    } else {
+        m_autoScrollPixels -= amount;
+    }
+    QScrollBar* bar = view->verticalScrollBar();
+    const int before = bar->value();
+    bar->setValue(before + amount);
+    if (bar->value() == before)
+        return;
+    // The pointer stays put while the files move under it: mark the folder now beneath it.
+    const QModelIndex index = view->indexAt(m_dragPosition);
+    const QString path = index.data(DirectoryModel::PathRole).toString();
+    const bool folder = index.isValid() && index.data(DirectoryModel::IsDirRole).toBool();
+    setDropTarget(view, folder && !m_draggedPaths.contains(path) ? path : QString());
+}
+
+void FileView::stopAutoScroll()
+{
+    m_autoScrollTimer.stop();
+    m_autoScrollPixels = 0;
+    m_autoScrollView = nullptr;
+}
+
+void FileView::setDropTarget(QAbstractItemView* view, const QString& path)
+{
+    if (view->property(DropTargetProperty).toString() == path)
+        return;
+    view->setProperty(DropTargetProperty, path);
     view->viewport()->update();
 }
 
@@ -352,16 +431,20 @@ bool FileView::handleDrag(QAbstractItemView* view, QDropEvent* event)
     const QStringList paths = dnd::localPaths(event->mimeData());
     const QPoint position = event->position().toPoint();
     const QModelIndex index = view->indexAt(position);
+    if (event->type() == QEvent::Drop)
+        stopAutoScroll();
+    else
+        updateAutoScroll(view, position, paths);
 
     // Onto a folder that is not itself being dragged, or else onto the folder shown.
     QString directory = m_dropDirectory;
     bool intoTrash = m_dropIntoTrash;
-    int row = -1;
+    QString target;
     if (index.isValid() && index.data(DirectoryModel::IsDirRole).toBool()
         && !paths.contains(index.data(DirectoryModel::PathRole).toString())) {
         directory = index.data(DirectoryModel::PathRole).toString();
         intoTrash = false;
-        row = index.row();
+        target = directory;
     }
 
     Qt::DropAction action = Qt::IgnoreAction;
@@ -375,7 +458,7 @@ bool FileView::handleDrag(QAbstractItemView* view, QDropEvent* event)
                    << (intoTrash ? u"trash"_s : directory) << "files" << paths.size() << "possible"
                    << event->possibleActions() << "modifiers" << event->modifiers() << "->" << action;
     if (action == Qt::IgnoreAction) {
-        setDropRow(view, -1);
+        setDropTarget(view, {});
         // Entering must be accepted whenever files are dragged, even where they cannot be
         // dropped: a widget that turns the drag away on entering never hears of it again,
         // so the folders further on could not be reached.
@@ -387,11 +470,11 @@ bool FileView::handleDrag(QAbstractItemView* view, QDropEvent* event)
         event->ignore();
         return false;
     }
-    setDropRow(view, row);
+    setDropTarget(view, target);
     event->setDropAction(action);
     event->accept();
     if (event->type() == QEvent::Drop) {
-        setDropRow(view, -1);
+        setDropTarget(view, {});
         emit dropped(paths, intoTrash ? QString() : directory, action);
     }
     return true;
@@ -422,7 +505,8 @@ bool FileView::eventFilter(QObject* watched, QEvent* event)
         handleDrag(view, static_cast<QDropEvent*>(event));
         return true;
     case QEvent::DragLeave:
-        setDropRow(view, -1);
+        stopAutoScroll();
+        setDropTarget(view, {});
         return true;
     default:
         break;

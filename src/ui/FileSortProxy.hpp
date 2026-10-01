@@ -30,6 +30,9 @@ public:
     // Case-sensitive sorting puts uppercase before lowercase, like `ls`.
     void setCaseSensitive(bool caseSensitive);
 
+    // Every folder keeps its arrow, also while it is being listed and when all it holds is hidden.
+    bool hasChildren(const QModelIndex& parent = {}) const override;
+
 protected:
     bool lessThan(const QModelIndex& left, const QModelIndex& right) const override;
     bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override;

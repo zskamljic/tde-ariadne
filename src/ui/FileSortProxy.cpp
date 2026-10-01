@@ -106,8 +106,8 @@ void FileSortProxy::setShowHidden(bool show)
 
 bool FileSortProxy::lessThan(const QModelIndex& left, const QModelIndex& right) const
 {
-    const FileEntry& a = m_model->entry(left.row());
-    const FileEntry& b = m_model->entry(right.row());
+    const FileEntry& a = m_model->entry(left);
+    const FileEntry& b = m_model->entry(right);
 
     if (m_foldersFirst && a.isDir != b.isDir)
         return a.isDir;
@@ -133,9 +133,14 @@ bool FileSortProxy::lessThan(const QModelIndex& left, const QModelIndex& right) 
     return m_descending ? result > 0 : result < 0;
 }
 
+bool FileSortProxy::hasChildren(const QModelIndex& parent) const
+{
+    return parent.isValid() ? m_model->hasChildren(mapToSource(parent)) : QSortFilterProxyModel::hasChildren(parent);
+}
+
 bool FileSortProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const
 {
-    return m_showHidden || sourceParent.isValid() || !m_model->entry(sourceRow).isHidden;
+    return m_showHidden || !m_model->entry(m_model->index(sourceRow, 0, sourceParent)).isHidden;
 }
 
 } // namespace ariadne
