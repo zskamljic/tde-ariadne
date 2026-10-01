@@ -104,10 +104,15 @@ QImage runExternal(const ExternalThumbnailer& thumbnailer, const ThumbnailReques
     if (!directory.isValid())
         return {};
     const QString output = directory.filePath(u"thumbnail.png"_s);
+    // In the sandbox the file appears at a fixed place; its extension is kept, as some
+    // thumbnailers go by it.
+    const bool sandbox = thumbnails::canSandbox();
+    const QString suffix = QFileInfo(request.path).suffix();
+    const QString input = !sandbox ? request.path : suffix.isEmpty() ? u"/tmp/input"_s : u"/tmp/input."_s + suffix;
     const QMap<QChar, QString> values {
         {u's', QString::number(pixels)},
-        {u'u', thumbnails::fileUri(request.path)},
-        {u'i', request.path},
+        {u'u', thumbnails::fileUri(input)},
+        {u'i', input},
         {u'o', output},
     };
 
@@ -116,6 +121,8 @@ QImage runExternal(const ExternalThumbnailer& thumbnailer, const ThumbnailReques
         return {};
     for (QString& argument : arguments)
         argument = expandField(argument, values);
+    if (sandbox)
+        arguments = thumbnails::sandboxed(arguments, request.path, input, directory.path());
 
     QProcess process;
     process.setProgram(arguments.takeFirst());
@@ -187,6 +194,57 @@ std::optional<ExternalThumbnailer> parseThumbnailerFile(const QString& path)
 } // namespace
 
 namespace thumbnails {
+
+QStringList sandboxed(
+    const QStringList& command, const QString& input, const QString& sandboxInput, const QString& outputDirectory)
+{
+    // clang-format off
+    QStringList arguments {
+        u"bwrap"_s,
+        // The system, read-only, with what programs need from /etc to run and to find fonts.
+        u"--ro-bind"_s, u"/usr"_s, u"/usr"_s,
+        u"--ro-bind-try"_s, u"/etc/ld.so.cache"_s, u"/etc/ld.so.cache"_s,
+        u"--ro-bind-try"_s, u"/etc/fonts"_s, u"/etc/fonts"_s,
+        u"--ro-bind-try"_s, u"/etc/alternatives"_s, u"/etc/alternatives"_s,
+        u"--ro-bind-try"_s, u"/var/cache/fontconfig"_s, u"/var/cache/fontconfig"_s,
+        u"--symlink"_s, u"usr/lib"_s, u"/lib"_s,
+        u"--symlink"_s, u"usr/lib64"_s, u"/lib64"_s,
+        u"--symlink"_s, u"usr/bin"_s, u"/bin"_s,
+        u"--symlink"_s, u"usr/bin"_s, u"/sbin"_s,
+        u"--proc"_s, u"/proc"_s,
+        u"--dev"_s, u"/dev"_s,
+        // Nothing of the user's but the one file, and a place for the thumbnail.
+        u"--tmpfs"_s, u"/tmp"_s,
+        u"--ro-bind"_s, input, sandboxInput,
+        u"--bind"_s, outputDirectory, outputDirectory,
+        u"--setenv"_s, u"HOME"_s, u"/tmp"_s,
+        u"--setenv"_s, u"GIO_USE_VFS"_s, u"local"_s,
+        // No network, no other processes, and gone when Ariadne is.
+        u"--unshare-all"_s,
+        u"--die-with-parent"_s,
+        u"--new-session"_s,
+        u"--chdir"_s, u"/"_s,
+    };
+    // clang-format on
+    return arguments + command;
+}
+
+bool canSandbox()
+{
+    // Some systems do not allow the user namespaces bubblewrap needs; then thumbnailers run as
+    // they would without it, rather than not at all.
+    static const bool works = [] {
+        const QString bwrap = QStandardPaths::findExecutable(u"bwrap"_s);
+        if (bwrap.isEmpty())
+            return false;
+        QProcess process;
+        process.setStandardOutputFile(QProcess::nullDevice());
+        process.setStandardErrorFile(QProcess::nullDevice());
+        process.start(bwrap, {u"--ro-bind"_s, u"/"_s, u"/"_s, u"--unshare-all"_s, u"--die-with-parent"_s, u"true"_s});
+        return process.waitForFinished(5000) && process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+    }();
+    return works;
+}
 
 QString cacheDirectory()
 {

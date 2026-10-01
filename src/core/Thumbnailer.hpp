@@ -67,6 +67,13 @@ QString cachePath(const QString& path, int pixels);
 
 QList<ExternalThumbnailer> findExternalThumbnailers();
 
+// External thumbnailers read files from anywhere, often of unknown origin, with decoders that
+// may have bugs. They run in a bubblewrap sandbox: the system read-only, no home folder, no
+// network, and only the file to thumbnail (at `sandboxInput`) and the folder for the result.
+bool canSandbox();
+QStringList sandboxed(
+    const QStringList& command, const QString& input, const QString& sandboxInput, const QString& outputDirectory);
+
 // Returns a valid cached thumbnail, or creates and caches one. Blocking.
 QImage load(const ThumbnailRequest& request, int pixels, const QList<ExternalThumbnailer>& external);
 
