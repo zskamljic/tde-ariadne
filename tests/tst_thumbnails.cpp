@@ -1,5 +1,6 @@
 #include "core/Thumbnailer.hpp"
 
+#include <QDir>
 #include <QDirIterator>
 #include <QFile>
 #include <QFileInfo>
@@ -25,12 +26,30 @@ class TestThumbnails : public QObject {
     }
 
     QTemporaryDir m_cache;
+    QTemporaryDir m_data;
 
 private slots:
     void initTestCase()
     {
         // Thumbnails made here are not the user's to keep.
         qputenv("XDG_CACHE_HOME", m_cache.path().toLocal8Bit());
+        // A thumbnailer of our own, for a type nothing else handles.
+        qputenv("XDG_DATA_HOME", m_data.path().toLocal8Bit());
+        QVERIFY(QDir().mkpath(m_data.filePath(u"thumbnailers"_s)));
+        QFile thumbnailer(m_data.filePath(u"thumbnailers/test.thumbnailer"_s));
+        QVERIFY(thumbnailer.open(QIODevice::WriteOnly));
+        thumbnailer.write("[Thumbnailer Entry]\nExec=true %i %o\nMimeType=video/x-ariadne-test;\n");
+    }
+
+    void largeFilesGoToThumbnailers()
+    {
+        // Videos are often larger than any image decoded here; their thumbnailers take them.
+        const Thumbnailer thumbnailer;
+        constexpr qint64 large = 2LL * 1024 * 1024 * 1024;
+        QVERIFY(thumbnailer.canThumbnail(u"/videos/film.test"_s, u"video/x-ariadne-test"_s, large));
+        QVERIFY(thumbnailer.canThumbnail(u"/videos/clip.test"_s, u"video/x-ariadne-test"_s, 1024));
+        QVERIFY(!thumbnailer.canThumbnail(u"/videos/empty.test"_s, u"video/x-ariadne-test"_s, 0));
+        QVERIFY(!thumbnailer.canThumbnail(u"/data/blob.bin"_s, u"application/x-ariadne-none"_s, 1024));
     }
 
     void sandboxIsolates()

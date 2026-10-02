@@ -21,6 +21,7 @@ namespace ariadne {
 namespace {
 
 constexpr int SizeClasses[] = {128, 256, 512, 1024};
+// Images are decoded here, whole; larger ones are left to thumbnailers of their own, if any.
 constexpr qint64 MaxFileSize = 200LL * 1024 * 1024;
 constexpr int ExternalTimeoutMs = 15'000;
 
@@ -309,7 +310,7 @@ QImage load(const ThumbnailRequest& request, int pixels, const QList<ExternalThu
         return {};
 
     QImage image;
-    if (request.mimeType.startsWith(u"image/")
+    if (request.mimeType.startsWith(u"image/") && request.size <= MaxFileSize
         && QImageReader::supportedMimeTypes().contains(request.mimeType.toUtf8()))
         image = readImage(request.path, pixels);
     if (image.isNull()) {
@@ -353,10 +354,12 @@ void Thumbnailer::setSize(int pixels)
 
 bool Thumbnailer::canThumbnail(const QString& path, const QString& mimeType, qint64 fileSize) const
 {
-    if (fileSize <= 0 || fileSize > MaxFileSize || path.startsWith(thumbnails::cacheDirectory() + u'/'))
+    if (fileSize <= 0 || path.startsWith(thumbnails::cacheDirectory() + u'/'))
         return false;
-    if (m_imageMimeTypes.contains(mimeType))
+    if (fileSize <= MaxFileSize && m_imageMimeTypes.contains(mimeType))
         return true;
+    // External thumbnailers, as for videos, read only what they need, apart from Ariadne and
+    // with a time limit, so files of any size go to them.
     return findFor(mimeType, *m_external) != nullptr;
 }
 
