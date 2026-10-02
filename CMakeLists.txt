@@ -17,7 +17,7 @@ find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets DBus Concurrent)
 find_package(PkgConfig REQUIRED)
 pkg_search_module(ARCHIVE REQUIRED IMPORTED_TARGET libarchive)
 # libtde as installed; for working on both, a checkout next to this one is used instead.
-find_package(Tde 0.1 QUIET)
+find_package(Tde 0.2 QUIET)
 if(NOT Tde_FOUND)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../libtde/CMakeLists.txt)
         message(STATUS "Using libtde from ${CMAKE_CURRENT_SOURCE_DIR}/../libtde")
