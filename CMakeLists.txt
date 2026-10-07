@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.28)
 project(ariadne
     VERSION 0.2.1
     DESCRIPTION "A file manager"
-    LANGUAGES CXX)
+    LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -16,6 +16,11 @@ option(ARIADNE_SANITIZE "Build with address and undefined behaviour sanitizers" 
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Widgets DBus Concurrent)
 find_package(PkgConfig REQUIRED)
 pkg_search_module(ARCHIVE REQUIRED IMPORTED_TARGET libarchive)
+pkg_check_modules(WAYLAND_CLIENT REQUIRED IMPORTED_TARGET wayland-client)
+pkg_get_variable(WAYLAND_SCANNER wayland-scanner wayland_scanner)
+if(NOT WAYLAND_SCANNER)
+    message(FATAL_ERROR "wayland-scanner was not found")
+endif()
 # libtde as installed; for working on both, a checkout next to this one is used instead.
 find_package(Tde 0.2 QUIET)
 if(NOT Tde_FOUND)
@@ -62,6 +67,15 @@ target_link_libraries(ariadne-core
     PUBLIC Qt6::Core Qt6::Gui Qt6::DBus Qt6::Concurrent Tde::Tde
     PRIVATE PkgConfig::ARCHIVE)
 
+# xdg-foreign, which places a file picker with the window of the program it is for.
+set(foreign_xml ${CMAKE_CURRENT_SOURCE_DIR}/protocols/xdg-foreign-unstable-v2.xml)
+set(foreign_header ${CMAKE_CURRENT_BINARY_DIR}/xdg-foreign-unstable-v2-client-protocol.h)
+set(foreign_code ${CMAKE_CURRENT_BINARY_DIR}/xdg-foreign-unstable-v2-protocol.c)
+add_custom_command(OUTPUT ${foreign_header}
+    COMMAND ${WAYLAND_SCANNER} client-header ${foreign_xml} ${foreign_header} DEPENDS ${foreign_xml})
+add_custom_command(OUTPUT ${foreign_code}
+    COMMAND ${WAYLAND_SCANNER} private-code ${foreign_xml} ${foreign_code} DEPENDS ${foreign_xml})
+
 add_library(ariadne-ui STATIC
     src/ui/Application.cpp
     src/ui/BatchRenameDialog.cpp
@@ -73,6 +87,7 @@ add_library(ariadne-ui STATIC
     src/ui/FilePicker.cpp
     src/ui/FileSortProxy.cpp
     src/ui/FileView.cpp
+    src/ui/ForeignParent.cpp
     src/ui/GridView.cpp
     src/ui/Jobs.cpp
     src/ui/JobsButton.cpp
@@ -82,8 +97,11 @@ add_library(ariadne-ui STATIC
     src/ui/PropertiesDialog.cpp
     src/ui/Sidebar.cpp
     src/ui/StyleSheet.cpp
+    ${foreign_header}
+    ${foreign_code}
 )
-target_link_libraries(ariadne-ui PUBLIC ariadne-core Qt6::Widgets Qt6::Concurrent)
+target_include_directories(ariadne-ui PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
+target_link_libraries(ariadne-ui PUBLIC ariadne-core Qt6::Widgets Qt6::Concurrent PRIVATE PkgConfig::WAYLAND_CLIENT)
 
 qt_add_executable(ariadne src/main.cpp)
 target_link_libraries(ariadne PRIVATE ariadne-ui)

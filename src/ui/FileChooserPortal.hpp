@@ -37,7 +37,8 @@ public slots:
         const QString& title, const QVariantMap& options, QVariantMap& results);
 
 private:
-    void pick(chooser::Mode mode, const QDBusObjectPath& handle, const QString& title, const QVariantMap& options);
+    void pick(chooser::Mode mode, const QDBusObjectPath& handle, const QString& parentWindow, const QString& title,
+        const QVariantMap& options);
 
     Application& m_app;
     int m_open = 0;
