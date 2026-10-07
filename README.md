@@ -12,8 +12,9 @@ The PKGBUILDs live in [`packaging/arch`](packaging/arch).
 
 ## Building
 
-Needs a C++23 compiler, CMake ≥ 3.28, Qt ≥ 6.8 (base) and [libtde](https://github.com/zskamljic/libtde),
-installed or checked out next to this repository (then it is built along).
+Needs a C++23 compiler, CMake ≥ 3.28, Qt ≥ 6.8 (base), libwayland (with `wayland-scanner`) and
+[libtde](https://github.com/zskamljic/libtde), installed or checked out next to this repository
+(then it is built along).
 At runtime, UDisks2 is used for mounting drives and unlocking encrypted ones, and gvfs (with
 `gio` and its MTP and SMB backends) for phones, cameras and network shares, if they are installed.
 
@@ -42,6 +43,16 @@ or **Make Default File Manager…** in the menu. This sets up, for your user:
 
 Ariadne runs as a single instance: starting it again opens a window in the one running. After
 an upgrade, the running one hands over to the new version once none of its windows are open.
+
+## Picking files for other applications
+
+Ariadne is the file chooser of xdg-desktop-portal in TDE: when an application opens or saves a
+file through the portal, the window to pick it is Ariadne's, with the application's file types,
+its own options, and a name to save under. GTK 4 applications and those in Flatpak use the
+portal anyway; in TDE, Qt and GTK 3 applications are made to as well (`QT_QPA_PLATFORMTHEME`
+and `GTK_USE_PORTAL`). Ariadne installs the portal (`tde.portal`) and starts when it is
+needed; the TDE session's `tde-portals.conf` picks it for files. Through xdg-foreign, the
+compositor learns which window the picker is for; Atlas places it over that window.
 
 On GNOME, Nautilus cannot be removed, as `xdg-desktop-portal-gnome` depends on it; it stays
 installed and unused. To go back, remove the two files above and run
