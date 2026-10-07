@@ -2,6 +2,7 @@
 #include "core/DefaultFileManager.hpp"
 #include "core/Location.hpp"
 #include "ui/Application.hpp"
+#include "ui/FileChooserPortal.hpp"
 #include "ui/FileManagerService.hpp"
 #include "ui/StyleSheet.hpp"
 
@@ -32,6 +33,9 @@ int main(int argc, char* argv[])
     // Qt registers its app ID with xdg-desktop-portal, which fails harmlessly when the desktop
     // already did so on launch, but warns on every start. QT_LOGGING_RULES still overrides this.
     QLoggingCategory::setFilterRules(u"qt.qpa.services.warning=false"_s);
+    // Ariadne picks files for others through the portal: its own dialogs must not ask it.
+    if (qgetenv("QT_QPA_PLATFORMTHEME") == "xdgdesktopportal")
+        qunsetenv("QT_QPA_PLATFORMTHEME");
     QApplication app(argc, argv);
     QApplication::setApplicationName(u"ariadne"_s);
     QApplication::setApplicationVersion(QStringLiteral(ARIADNE_VERSION));
@@ -117,6 +121,9 @@ int main(int argc, char* argv[])
         if (service || ariadne::FileManagerService::forwardToRunning(toStrings(folders), toStrings(items)))
             return 0;
     }
+    ariadne::FileChooserPortal fileChooser(ariadne);
+    if (shared)
+        fileChooser.registerOnBus();
 
     for (const QUrl& folder : std::as_const(folders))
         ariadne.openWindow(folder);
@@ -147,11 +154,16 @@ int main(int argc, char* argv[])
         QObject::connect(
             &app, &QGuiApplication::lastWindowClosed, &app, [&] { QTimer::singleShot(500, &app, restartIfIdle); });
     } else if (service) {
-        // Started by D-Bus: the call that started it opens a window. Should none come, do not linger.
-        QTimer::singleShot(30'000, &app, [&ariadne] {
-            if (!ariadne.hasWindows())
+        // Started by D-Bus: the call that started it opens a window. Should none come, do not
+        // linger; once the last is closed, go, a moment later, so its answer is out first.
+        QApplication::setQuitOnLastWindowClosed(false);
+        const auto quitIfIdle = [&] {
+            if (!ariadne.hasWindows() && !fileChooser.isBusy())
                 QApplication::quit();
-        });
+        };
+        QTimer::singleShot(30'000, &app, quitIfIdle);
+        QObject::connect(&app, &QGuiApplication::lastWindowClosed, &app,
+            [&app, quitIfIdle] { QTimer::singleShot(1000, &app, quitIfIdle); });
     }
 
     return QApplication::exec();

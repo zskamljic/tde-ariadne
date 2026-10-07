@@ -48,6 +48,7 @@ add_library(ariadne-core STATIC
     src/core/DefaultFileManager.cpp
     src/core/DeviceMonitor.cpp
     src/core/DirectoryListing.cpp
+    src/core/FileChooser.cpp
     src/core/FileOperations.cpp
     src/core/Gvfs.cpp
     src/core/Location.cpp
@@ -67,8 +68,10 @@ add_library(ariadne-ui STATIC
     src/ui/Dialogs.cpp
     src/ui/DirectoryModel.cpp
     src/ui/DragDrop.cpp
-    src/ui/FileSortProxy.cpp
+    src/ui/FileChooserPortal.cpp
     src/ui/FileManagerService.cpp
+    src/ui/FilePicker.cpp
+    src/ui/FileSortProxy.cpp
     src/ui/FileView.cpp
     src/ui/GridView.cpp
     src/ui/Jobs.cpp
@@ -89,13 +92,17 @@ target_compile_definitions(ariadne PRIVATE ARIADNE_VERSION="${PROJECT_VERSION}")
 include(GNUInstallDirs)
 install(TARGETS ariadne RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 install(FILES data/ariadne.desktop DESTINATION ${CMAKE_INSTALL_DATADIR}/applications)
-foreach(service io.github.zskamljic.Ariadne org.freedesktop.FileManager1)
+foreach(service io.github.zskamljic.Ariadne org.freedesktop.FileManager1 org.freedesktop.impl.portal.desktop.tde)
     configure_file(data/dbus/${service}.service.in ${service}.service @ONLY)
 endforeach()
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/io.github.zskamljic.Ariadne.service
     DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/services)
 install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.freedesktop.FileManager1.service
     DESTINATION ${CMAKE_INSTALL_DATADIR}/ariadne)
+# The file chooser of xdg-desktop-portal for TDE.
+install(FILES ${CMAKE_CURRENT_BINARY_DIR}/org.freedesktop.impl.portal.desktop.tde.service
+    DESTINATION ${CMAKE_INSTALL_DATADIR}/dbus-1/services)
+install(FILES data/portal/tde.portal DESTINATION ${CMAKE_INSTALL_DATADIR}/xdg-desktop-portal/portals)
 # The example config, laid out like ~/.config/tde. The desktop-wide one comes with libtde.
 install(FILES data/ariadne/config.lua DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples/tde/ariadne)
 install(FILES README.md DESTINATION ${CMAKE_INSTALL_DOCDIR})

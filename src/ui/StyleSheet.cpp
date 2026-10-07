@@ -36,6 +36,9 @@ QTreeView#ListView::item:selected { background: @accent@; color: @accent_text@; 
 
 QLabel#PlaceholderText { color: @dim_text@; font-size: 15pt; font-weight: bold; }
 QWidget#InfoBar { background: @window@; border-bottom: 1px solid @border@; }
+QWidget#PickerFooter { background: @window@; border-top: 1px solid @border@; }
+QPushButton#SuggestedButton { background: @accent@; color: @accent_text@; border-color: @accent@; }
+QPushButton#SuggestedButton:disabled { background: @hover@; color: @dim_text@; border-color: @border@; }
 QLineEdit#InlineEditor {
     background: @entry@; border: 1px solid @accent@; border-radius: @radius_small@; padding: 1px 4px;
 }
