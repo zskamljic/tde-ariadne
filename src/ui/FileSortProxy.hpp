@@ -1,9 +1,12 @@
 #pragma once
 
 #include "core/Config.hpp"
+#include "core/DirectoryListing.hpp"
 
 #include <QCollator>
 #include <QSortFilterProxyModel>
+
+#include <functional>
 
 namespace ariadne {
 
@@ -29,6 +32,9 @@ public:
     void setShowHidden(bool show);
     // Case-sensitive sorting puts uppercase before lowercase, like `ls`.
     void setCaseSensitive(bool caseSensitive);
+    // Only files `accepts` passes are shown, as when picking files of some kind; folders
+    // always are, to get around. None shows every file.
+    void setFileFilter(std::function<bool(const FileEntry&)> accepts);
 
     // Every folder keeps its arrow, also while it is being listed and when all it holds is hidden.
     bool hasChildren(const QModelIndex& parent = {}) const override;
@@ -47,6 +53,7 @@ private:
     bool m_foldersFirst = true;
     bool m_showHidden = false;
     bool m_caseSensitive = false;
+    std::function<bool(const FileEntry&)> m_fileFilter;
 };
 
 } // namespace ariadne

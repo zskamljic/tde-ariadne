@@ -140,7 +140,16 @@ bool FileSortProxy::hasChildren(const QModelIndex& parent) const
 
 bool FileSortProxy::filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const
 {
-    return m_showHidden || !m_model->entry(m_model->index(sourceRow, 0, sourceParent)).isHidden;
+    const FileEntry& entry = m_model->entry(m_model->index(sourceRow, 0, sourceParent));
+    if (entry.isHidden && !m_showHidden)
+        return false;
+    return entry.isDir || !m_fileFilter || m_fileFilter(entry);
+}
+
+void FileSortProxy::setFileFilter(std::function<bool(const FileEntry&)> accepts)
+{
+    m_fileFilter = std::move(accepts);
+    invalidate();
 }
 
 } // namespace ariadne
