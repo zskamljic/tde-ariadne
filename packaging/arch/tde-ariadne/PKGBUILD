@@ -35,7 +35,7 @@ optdepends=(
 )
 install=ariadne.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('55ada0cf1e1ef85078548fa72e3357c30902d9570ce8fb9d25231fd3f65c9357')
 
 build() {
   cmake -B build -S "$pkgname-$pkgver" -G Ninja \
