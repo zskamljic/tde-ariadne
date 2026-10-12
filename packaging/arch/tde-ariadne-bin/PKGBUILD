@@ -2,7 +2,7 @@
 
 _pkgname=tde-ariadne
 pkgname=tde-ariadne-bin
-pkgver=0.3.0
+pkgver=0.3.1
 pkgrel=1
 pkgdesc='A Nautilus-style file manager built with Qt 6'
 arch=(x86_64)
