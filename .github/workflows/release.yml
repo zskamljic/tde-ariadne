@@ -1,0 +1,42 @@
+name: Release
+
+# A version tag builds the program as the Arch packages do and attaches it to the tag's GitHub
+# release, for the -bin packages to install.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build and publish
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install dependencies
+        run: >
+          pacman -Syu --noconfirm --needed
+          gcc pkgconf cmake ninja git zstd qt6-base qt6-svg lua libarchive wayland shared-mime-info
+      # libtde is not in the Arch repositories; built and installed from its sources.
+      - name: Install libtde
+        run: |
+          git clone --depth 1 https://github.com/zskamljic/libtde.git /tmp/libtde
+          cmake -S /tmp/libtde -B /tmp/libtde/build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build /tmp/libtde/build
+          cmake --install /tmp/libtde/build
+      - uses: actions/checkout@v4
+      - name: Build
+        run: |
+          cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+          cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Package
+        run: |
+          DESTDIR="$PWD/pkg" cmake --install build
+          tar --zstd -C pkg -cf "tde-ariadne-${GITHUB_REF_NAME#v}-x86_64.tar.zst" .
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: tde-ariadne-*-x86_64.tar.zst
