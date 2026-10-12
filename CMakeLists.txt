@@ -22,7 +22,7 @@ if(NOT WAYLAND_SCANNER)
     message(FATAL_ERROR "wayland-scanner was not found")
 endif()
 # libtde as installed; for working on both, a checkout next to this one is used instead.
-find_package(Tde 0.2 QUIET)
+find_package(Tde 0.3 QUIET)
 if(NOT Tde_FOUND)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../libtde/CMakeLists.txt)
         message(STATUS "Using libtde from ${CMAKE_CURRENT_SOURCE_DIR}/../libtde")
