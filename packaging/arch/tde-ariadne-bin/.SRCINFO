@@ -28,6 +28,6 @@ pkgbase = tde-ariadne-bin
 	conflicts = tde-ariadne
 	noextract = tde-ariadne-0.3.2-x86_64.tar.zst
 	source = tde-ariadne-0.3.2-x86_64.tar.zst::https://github.com/zskamljic/tde-ariadne/releases/download/v0.3.2/tde-ariadne-0.3.2-x86_64.tar.zst
-	sha256sums = SKIP
+	sha256sums = de60e870aa894ceb549ca0e518ba022a0da7e8eaeee3c1175613e8c2f482200b
 
 pkgname = tde-ariadne-bin
