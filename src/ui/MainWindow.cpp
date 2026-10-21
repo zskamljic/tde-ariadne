@@ -634,8 +634,10 @@ void MainWindow::updatePlaceholder()
     if (!m_loadError.isEmpty()) {
         m_view->setPlaceholder(u"dialog-error"_s, m_loadError);
     } else if (!m_model->searchQuery().isEmpty() && m_proxy->rowCount() == 0) {
-        m_view->setPlaceholder(u"edit-find"_s,
-            m_model->isSearching() ? u"Searching…"_s : u"No results for “%1”"_s.arg(m_model->searchQuery()));
+        if (m_model->isSearching())
+            m_view->setPlaceholder(u"edit-find"_s, u"Searching…"_s);
+        else
+            m_view->setPlaceholder(u"edit-find"_s, u"No results for “%1”"_s, m_model->searchQuery());
     } else if (m_model->isLoading() || m_proxy->rowCount() > 0) {
         m_view->setPlaceholder({}, {});
     } else if (m_location == location::trash()) {

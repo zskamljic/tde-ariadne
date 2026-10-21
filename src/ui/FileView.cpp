@@ -185,7 +185,9 @@ FileView::FileView(QAbstractItemModel* model, QWidget* parent)
     placeholderLayout->addStretch(1);
     placeholderLayout->addWidget(m_placeholderIcon, 0, Qt::AlignHCenter);
     placeholderLayout->addSpacing(12);
-    placeholderLayout->addWidget(m_placeholderText, 0, Qt::AlignHCenter);
+    // The text spans the whole width and centres itself, since a wrapped label held to its
+    // preferred width is never asked how tall its lines make it, and loses all but one.
+    placeholderLayout->addWidget(m_placeholderText);
     placeholderLayout->addStretch(1);
     m_placeholderText->setWordWrap(true);
     m_placeholderText->setAlignment(Qt::AlignCenter);
@@ -304,8 +306,10 @@ void FileView::focusView()
     currentView()->setFocus(Qt::OtherFocusReason);
 }
 
-void FileView::setPlaceholder(const QString& iconName, const QString& text)
+void FileView::setPlaceholder(const QString& iconName, const QString& text, const QString& name)
 {
+    m_placeholderTemplate = text;
+    m_placeholderName = name;
     if (text.isEmpty()) {
         m_placeholder->hide();
         return;
@@ -322,10 +326,30 @@ void FileView::setPlaceholder(const QString& iconName, const QString& text)
         tde::theme::symbolicIcon(iconName).paint(&painter, QRect(0, 0, size, size));
     }
     m_placeholderIcon->setPixmap(pixmap);
-    m_placeholderText->setText(text);
     m_placeholder->setGeometry(rect());
+    updatePlaceholderText();
     m_placeholder->show();
     m_placeholder->raise();
+}
+
+void FileView::updatePlaceholderText()
+{
+    if (m_placeholderName.isEmpty()) {
+        m_placeholderText->setText(m_placeholderTemplate);
+        return;
+    }
+    // A name has no spaces to wrap at, as often as not, so it keeps to one line of its own,
+    // together with whatever clings to it in the text, such as quotes.
+    const qsizetype at = m_placeholderTemplate.indexOf(u"%1"_s);
+    const QString before = m_placeholderTemplate.left(at);
+    const QString after = m_placeholderTemplate.mid(at + 2);
+    const QString clinging = before.mid(before.lastIndexOf(u' ') + 1) + after.left(after.indexOf(u' '));
+    m_placeholderText->ensurePolished();
+    const QFontMetrics metrics(m_placeholderText->font());
+    const QMargins margins = m_placeholder->layout()->contentsMargins();
+    const int width = m_placeholder->width() - margins.left() - margins.right() - metrics.horizontalAdvance(clinging);
+    m_placeholderText->setText(
+        m_placeholderTemplate.arg(metrics.elidedText(m_placeholderName, Qt::ElideMiddle, std::max(width, 0))));
 }
 
 void FileView::setSortIndicator(SortKey key, bool descending)
@@ -534,6 +558,8 @@ void FileView::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     m_placeholder->setGeometry(rect());
+    if (m_placeholder->isVisible())
+        updatePlaceholderText();
     placeStatus();
 }
 

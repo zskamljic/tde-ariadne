@@ -41,8 +41,9 @@ public:
     void editName(const QModelIndex& index);
     void focusView();
 
-    // Shown instead of the files when `text` is not empty.
-    void setPlaceholder(const QString& iconName, const QString& text);
+    // Shown instead of the files when `text` is not empty. A `name` takes the place of `%1` in
+    // the text, shortened in its middle to fit a line.
+    void setPlaceholder(const QString& iconName, const QString& text, const QString& name = {});
     void setSortIndicator(SortKey key, bool descending);
     // A floating line at the bottom, for what is selected; hidden when empty.
     void setStatusText(const QString& text);
@@ -69,6 +70,7 @@ protected:
 private:
     void setupView(QAbstractItemView* view);
     void placeStatus();
+    void updatePlaceholderText();
     bool handleDrag(QAbstractItemView* view, QDropEvent* event);
     // Scrolls while a drag hovers near the top or bottom edge, so files can reach folders
     // out of sight.
@@ -83,6 +85,8 @@ private:
     QWidget* m_placeholder;
     QLabel* m_placeholderIcon;
     QLabel* m_placeholderText;
+    QString m_placeholderTemplate;
+    QString m_placeholderName;
     QLabel* m_status;
     ViewMode m_mode = ViewMode::Grid;
     QString m_dropDirectory;
