@@ -17,7 +17,7 @@ bool matches(const QString& name, const QString& query);
 
 struct Options {
     QString query;
-    bool includeHidden = false; // also look at hidden files and inside hidden folders
+    bool includeHidden = false; // also find hidden files and folders; inside them is always searched
     int maxResults = 5000;
 };
 

@@ -71,12 +71,12 @@ void run(const QUrl& root, const Options& options, std::stop_token stop,
                 return;
             const QString name = item.fileName();
             const bool hidden = name.startsWith(u'.') || hiddenNames.contains(name);
-            if (hidden && !options.includeHidden)
-                continue;
             const QUrl url = location::child(folder, name);
+            // Hidden folders are searched all the same, as scripts and settings live in them;
+            // only the hidden names themselves wait for hidden files to be shown.
             if (item.isDir() && !item.isSymLink() && (remote || item.absoluteFilePath() != gvfsFolder))
                 folders.push_back(url);
-            if (!matches(name, options.query))
+            if ((hidden && !options.includeHidden) || !matches(name, options.query))
                 continue;
             batch.push_back(describeEntry(item.fileInfo(), url, hidden, mimeDatabase, remote));
             if (++total >= options.maxResults) {

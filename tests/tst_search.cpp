@@ -63,8 +63,13 @@ private slots:
         makeFile(u"s/.report-dot.txt"_s);
         QVERIFY(QFile::link(m_dir.filePath(u"s"_s), m_dir.filePath(u"s/deep/loop"_s)));
 
-        QCOMPARE(search(u"s"_s, u"report"_s),
-            (QStringList {u"s/report-1.txt"_s, u"s/deep/report-2.txt"_s, u"s/deep/deeper/report-3.txt"_s}));
+        const QStringList visible = search(u"s"_s, u"report"_s);
+        QCOMPARE(visible.size(), 4);
+        QCOMPARE(visible.first(), u"s/report-1.txt"_s);
+        QCOMPARE(visible.last(), u"s/deep/deeper/report-3.txt"_s);
+        QVERIFY(visible.contains(u"s/deep/report-2.txt"_s));
+        QVERIFY(visible.contains(u"s/.hidden/report-hidden.txt"_s)); // inside a hidden folder
+        QVERIFY(!visible.contains(u"s/.report-dot.txt"_s));
         const QStringList withHidden = search(u"s"_s, u"report"_s, true);
         QCOMPARE(withHidden.size(), 5);
         QVERIFY(withHidden.contains(u"s/.hidden/report-hidden.txt"_s));

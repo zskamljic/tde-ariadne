@@ -121,4 +121,4 @@ Drag a folder onto the sidebar to bookmark it; drag bookmarks to reorder them.
 | Ctrl+N / Ctrl+W / Ctrl+Q | New window / close window / quit |
 | Middle click | Open a folder in a new window |
 | Drag and drop | Move within a drive, copy across drives; hold Ctrl to copy, Shift to move |
-| Typing, Ctrl+F | Search this folder and everything below it (Esc goes back) |
+| Typing, Ctrl+F | Search this folder and everything below it, hidden folders too (Esc goes back) |
