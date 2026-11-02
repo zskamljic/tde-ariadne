@@ -92,6 +92,11 @@ folders, read-only: open or copy what is in them, or extract all or part of them
 still offers the archive manager, and `archives_as_folders = false` in the config makes that
 the default again.
 
+Copying, moving, extracting, compressing, deleting and moving to Trash run in the background:
+the button in the header bar shows how far each has got and how long it has left, and stops it.
+A stopped extraction or compression leaves nothing behind; stopped deleting leaves what it did
+not reach.
+
 The sidebar shows how full each drive is; Properties shows a folder's free space, and changes
 permissions for one item or several, or for everything inside a folder.
 

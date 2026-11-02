@@ -3,6 +3,7 @@
 #include "FileOperations.hpp"
 
 #include <QDir>
+#include <QDirListing>
 #include <QFile>
 #include <QFileInfo>
 #include <QHash>
@@ -69,6 +70,50 @@ Result run(const QStringList& arguments)
     return {ok, QString::fromLocal8Bit(process.readAllStandardOutput()), error};
 }
 
+const QString Stopped = u"It was stopped."_s;
+
+// bsdtar with -v, which tells of each file on a line of its own starting with `mark` ("x " as it
+// extracts one, "a " as it adds one): those are counted in `progress`, the rest is the error.
+Result runCounted(const QStringList& arguments, QStringView mark, TransferProgress& progress, const JobControl& control)
+{
+    if (control.cancelled())
+        return {false, {}, Stopped};
+    QProcess process;
+    process.setStandardInputFile(QProcess::nullDevice());
+    process.setReadChannel(QProcess::StandardError);
+    process.start(bsdtar(), arguments);
+    if (!process.waitForStarted())
+        return {false, {}, process.errorString()};
+    QByteArray pending;
+    QStringList errors;
+    const auto take = [&] {
+        pending += process.readAllStandardError();
+        qsizetype end = 0;
+        while ((end = pending.indexOf('\n')) >= 0) {
+            const QString line = QString::fromLocal8Bit(pending.left(end));
+            pending.remove(0, end + 1);
+            if (line.startsWith(mark)) {
+                ++progress.doneFiles;
+                progress.current = line.mid(mark.size()).section(u'/', -1, -1, QString::SectionSkipEmpty);
+                control.report(progress);
+            } else if (!line.isEmpty()) {
+                errors << line;
+            }
+        }
+    };
+    while (!process.waitForFinished(100)) {
+        take();
+        if (control.cancelled()) {
+            process.kill();
+            process.waitForFinished(-1);
+            return {false, {}, Stopped};
+        }
+    }
+    take();
+    const bool ok = process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+    return {ok, QString::fromLocal8Bit(process.readAllStandardOutput()), errors.join(u'\n')};
+}
+
 // bsdtar messages start with "bsdtar: "; the rest reads fine on its own.
 QString cleaned(const QString& error)
 {
@@ -108,7 +153,7 @@ QStringList compressFormats()
     return {u"zip"_s, u"tar.xz"_s, u"tar.gz"_s, u"tar.zst"_s, u"7z"_s};
 }
 
-std::expected<void, QString> compress(const QStringList& paths, const QString& archivePath)
+std::expected<void, QString> compress(const QStringList& paths, const QString& archivePath, const JobControl& control)
 {
     if (!isAvailable())
         return std::unexpected(u"Compressing needs bsdtar, from libarchive."_s);
@@ -123,15 +168,29 @@ std::expected<void, QString> compress(const QStringList& paths, const QString& a
         const QFileInfo info(path);
         arguments << u"-C"_s << info.absolutePath() << info.fileName();
     }
-    const Result result = run(arguments);
+    // What goes in is counted first, to tell how far it got.
+    TransferProgress progress;
+    for (const QString& path : paths) {
+        ++progress.totalFiles;
+        if (const QFileInfo info(path); info.isDir() && !info.isSymLink()) {
+            for (const auto& entry : QDirListing(path,
+                     QDirListing::IteratorFlag::Recursive | QDirListing::IteratorFlag::IncludeHidden
+                         | QDirListing::IteratorFlag::IncludeBrokenSymlinks)) {
+                Q_UNUSED(entry);
+                ++progress.totalFiles;
+            }
+        }
+    }
+    control.report(progress);
+    const Result result = runCounted(QStringList {u"-v"_s} + arguments, u"a ", progress, control);
     if (!result.ok) {
         QFile::remove(archivePath);
-        return std::unexpected(cleaned(result.error));
+        return std::unexpected(result.error == Stopped ? Stopped : cleaned(result.error));
     }
     return {};
 }
 
-std::expected<QString, QString> extract(const QString& archivePath, const QString& directory)
+std::expected<QString, QString> extract(const QString& archivePath, const QString& directory, const JobControl& control)
 {
     if (!isAvailable())
         return std::unexpected(u"Extracting archives needs bsdtar, from libarchive."_s);
@@ -141,7 +200,8 @@ std::expected<QString, QString> extract(const QString& archivePath, const QStrin
         return std::unexpected(cleaned(listing.error));
 
     QSet<QString> topLevel;
-    for (QString entry : listing.output.split(u'\n', Qt::SkipEmptyParts)) {
+    const QStringList listed = listing.output.split(u'\n', Qt::SkipEmptyParts);
+    for (QString entry : listed) {
         while (entry.startsWith(u"./"))
             entry.remove(0, 2);
         const QString first = entry.section(u'/', 0, 0);
@@ -166,8 +226,15 @@ std::expected<QString, QString> extract(const QString& archivePath, const QStrin
         result = destination;
     }
 
-    const Result extraction = run({u"-xf"_s, archivePath, u"-C"_s, destination});
+    TransferProgress progress {.totalFiles = int(listed.size())};
+    control.report(progress);
+    const Result extraction = runCounted({u"-xvf"_s, archivePath, u"-C"_s, destination}, u"x ", progress, control);
     if (!extraction.ok) {
+        // Stopped, what it extracted goes, as it was not there before.
+        if (extraction.error == Stopped) {
+            QDir(result).removeRecursively();
+            return std::unexpected(Stopped);
+        }
         if (createdFolder && QDir(destination).isEmpty(QDir::AllEntries | QDir::NoDotAndDotDot | QDir::Hidden))
             QDir().rmdir(destination);
         return std::unexpected(cleaned(extraction.error));
@@ -304,7 +371,7 @@ QString stagingFolder()
 }
 
 std::expected<void, QString> extractPaths(
-    const QString& archivePath, const QStringList& paths, const QString& directory)
+    const QString& archivePath, const QStringList& paths, const QString& directory, const JobControl& control)
 {
     if (!isAvailable())
         return std::unexpected(u"Extracting archives needs bsdtar, from libarchive."_s);
@@ -347,9 +414,18 @@ std::expected<void, QString> extractPaths(
     QStringList arguments {u"-xf"_s, archivePath, u"-C"_s, directory};
     if (strip > 0)
         arguments << u"--strip-components"_s << QString::number(strip);
-    const Result result = run(arguments + members);
+    TransferProgress progress;
+    for (const Entry& entry : **all) {
+        if (!entry.stored.isEmpty() && std::ranges::any_of(paths, [&](const QString& path) {
+                return entry.path == path || entry.path.startsWith(path + u'/');
+            }))
+            ++progress.totalFiles;
+    }
+    control.report(progress);
+    arguments[0] = u"-xvf"_s;
+    const Result result = runCounted(arguments + members, u"x ", progress, control);
     if (!result.ok)
-        return std::unexpected(cleaned(result.error));
+        return std::unexpected(result.error == Stopped ? Stopped : cleaned(result.error));
     return {};
 }
 

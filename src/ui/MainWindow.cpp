@@ -1117,8 +1117,9 @@ void MainWindow::trashPaths(const QStringList& paths)
     const QString what = describe(paths);
     auto trashed = std::make_shared<QList<fileops::Trashed>>();
     runFileOperation(
-        [paths, trashed] {
-            fileops::TrashResult result = fileops::moveToTrash(paths);
+        u"Moving %1 to Trash"_s.arg(what),
+        [paths, trashed](const JobControl& control) {
+            fileops::TrashResult result = fileops::moveToTrash(paths, control);
             *trashed = std::move(result.trashed);
             return result.failures;
         },
@@ -1147,7 +1148,10 @@ void MainWindow::deleteSelection()
         return;
     const QString done = entries.size() == 1 ? u"“%1” deleted."_s.arg(entries.front().name)
                                              : u"%1 items deleted."_s.arg(entries.size());
-    runFileOperation([paths = pathsOf(entries)] { return fileops::deletePermanently(paths); }, done, u"delete"_s);
+    runFileOperation(
+        u"Deleting %1"_s.arg(what),
+        [paths = pathsOf(entries)](const JobControl& control) { return fileops::deletePermanently(paths, control); },
+        done, u"delete"_s);
 }
 
 QStringList MainWindow::pathsOf(const std::vector<FileEntry>& entries)
@@ -1158,27 +1162,34 @@ QStringList MainWindow::pathsOf(const std::vector<FileEntry>& entries)
     return paths;
 }
 
-void MainWindow::runFileOperation(std::function<QList<fileops::Failure>()> job, const QString& doneMessage,
-    const QString& verb, std::function<bool()> recordUndo)
+void MainWindow::runFileOperation(const QString& description,
+    std::function<QList<fileops::Failure>(const JobControl&)> job, const QString& doneMessage, const QString& verb,
+    std::function<bool()> recordUndo)
 {
-    // Large folders take a while to delete; keep the window responsive meanwhile.
-    auto* watcher = new QFutureWatcher<QList<fileops::Failure>>(this);
-    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, doneMessage, verb, recordUndo] {
-        watcher->deleteLater();
-        const QList<fileops::Failure> failures = watcher->result();
-        m_model->reload();
-        const bool undoable = recordUndo && recordUndo();
-        if (failures.isEmpty()) {
-            showUndoableMessage(doneMessage, undoable);
-            return;
-        }
-        const fileops::Failure& first = failures.first();
-        QString message = u"Could not %1 “%2”: %3"_s.arg(verb, QFileInfo(first.path).fileName(), first.reason);
-        if (failures.size() > 1)
-            message += u" (and %1 more)"_s.arg(failures.size() - 1);
-        m_toast->showMessage(message, 6000);
-    });
-    watcher->setFuture(QtConcurrent::run(std::move(job)));
+    // Large folders take a while; the window stays responsive, and the job shows how far it got.
+    auto failures = std::make_shared<QList<fileops::Failure>>();
+    QPointer<MainWindow> self(this);
+    m_app.jobs().run(
+        description, [job = std::move(job), failures](const JobControl& control) { *failures = job(control); },
+        [self, failures, doneMessage, verb, recordUndo](bool cancelled) {
+            if (!self)
+                return;
+            self->m_model->reload();
+            const bool undoable = recordUndo && recordUndo();
+            if (cancelled) {
+                self->showUndoableMessage(u"Stopped; what was done stays done."_s, undoable);
+                return;
+            }
+            if (failures->isEmpty()) {
+                self->showUndoableMessage(doneMessage, undoable);
+                return;
+            }
+            const fileops::Failure& first = failures->first();
+            QString message = u"Could not %1 “%2”: %3"_s.arg(verb, QFileInfo(first.path).fileName(), first.reason);
+            if (failures->size() > 1)
+                message += u" (and %1 more)"_s.arg(failures->size() - 1);
+            self->m_toast->showMessage(message, 6000);
+        });
 }
 
 void MainWindow::restoreSelection()
@@ -1188,7 +1199,10 @@ void MainWindow::restoreSelection()
         return;
     const QString done = entries.size() == 1 ? u"“%1” restored."_s.arg(entries.front().name)
                                              : u"%1 items restored."_s.arg(entries.size());
-    runFileOperation([paths = pathsOf(entries)] { return fileops::restoreFromTrash(paths); }, done, u"restore"_s);
+    runFileOperation(
+        u"Restoring %1"_s.arg(
+            entries.size() == 1 ? u"“%1”"_s.arg(entries.front().name) : u"%1 items"_s.arg(entries.size())),
+        [paths = pathsOf(entries)](const JobControl&) { return fileops::restoreFromTrash(paths); }, done, u"restore"_s);
 }
 
 void MainWindow::emptyTrash()
@@ -1196,7 +1210,9 @@ void MainWindow::emptyTrash()
     if (!tde::Dialog::confirm(this, u"Empty Trash"_s, u"Permanently delete everything in the Trash?"_s,
             u"The items cannot be restored afterwards."_s, u"Empty Trash"_s))
         return;
-    runFileOperation([] { return fileops::emptyTrash(); }, u"The Trash is empty."_s, u"delete"_s);
+    runFileOperation(
+        u"Emptying the Trash"_s, [](const JobControl& control) { return fileops::emptyTrash(control); },
+        u"The Trash is empty."_s, u"delete"_s);
 }
 
 void MainWindow::openTerminal(const QString& directory)
@@ -1369,15 +1385,18 @@ void MainWindow::extractFromArchive(const std::vector<FileEntry>& entries)
         if (const auto inside = location::archivePlace(entry.url))
             paths << inside->inside;
     }
-    auto* watcher = new QFutureWatcher<std::expected<void, QString>>(this);
-    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, destination = *destination] {
-        watcher->deleteLater();
-        const auto result = watcher->result();
-        m_toast->showMessage(
-            result ? u"Extracted to “%1”."_s.arg(destination) : u"Could not extract: %1"_s.arg(result.error()),
-            result ? 4000 : 7000);
-    });
-    watcher->setFuture(QtConcurrent::run(archives::extractPaths, place->file, paths, *destination));
+    auto result = std::make_shared<std::expected<void, QString>>();
+    QPointer<MainWindow> self(this);
+    m_app.jobs().run(
+        u"Extracting from “%1”"_s.arg(QFileInfo(place->file).fileName()),
+        [result, archive = place->file, paths, destination = *destination](
+            const JobControl& control) { *result = archives::extractPaths(archive, paths, destination, control); },
+        [self, result, destination = *destination](bool) {
+            if (self)
+                self->m_toast->showMessage(*result ? u"Extracted to “%1”."_s.arg(destination)
+                                                   : u"Could not extract: %1"_s.arg(result->error()),
+                    *result ? 4000 : 7000);
+        });
 }
 
 void MainWindow::extractArchives(const QStringList& archivePaths, bool askForDestination)
@@ -1395,37 +1414,43 @@ void MainWindow::extractArchives(const QStringList& archivePaths, bool askForDes
         return;
     }
 
-    m_toast->showMessage(archivePaths.size() == 1
-            ? u"Extracting “%1”…"_s.arg(QFileInfo(archivePaths.front()).fileName())
-            : u"Extracting %1 archives…"_s.arg(archivePaths.size()));
     using Results = QList<std::pair<QString, std::expected<QString, QString>>>;
-    auto* watcher = new QFutureWatcher<Results>(this);
-    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, destination] {
-        watcher->deleteLater();
-        const Results results = watcher->result();
-        m_model->reload();
-        QStringList failures;
-        QString extracted;
-        for (const auto& [archive, result] : results) {
-            if (result)
-                extracted = *result;
-            else
-                failures << u"“%1”: %2"_s.arg(QFileInfo(archive).fileName(), result.error());
-        }
-        if (!failures.isEmpty()) {
-            m_toast->showMessage(u"Could not extract %1"_s.arg(failures.join(u"; "_s)), 7000);
-            return;
-        }
-        if (QDir::cleanPath(destination) == QDir::cleanPath(location::localPath(m_location)))
-            m_selectWhenCreated = QFileInfo(extracted).fileName();
-        m_toast->showMessage(u"Extracted to “%1”."_s.arg(extracted));
-    });
-    watcher->setFuture(QtConcurrent::run([archivePaths, destination] {
-        Results results;
-        for (const QString& path : archivePaths)
-            results.append({path, archives::extract(path, destination)});
-        return results;
-    }));
+    auto results = std::make_shared<Results>();
+    QPointer<MainWindow> self(this);
+    m_app.jobs().run(
+        archivePaths.size() == 1 ? u"Extracting “%1”"_s.arg(QFileInfo(archivePaths.front()).fileName())
+                                 : u"Extracting %1 archives"_s.arg(archivePaths.size()),
+        [archivePaths, destination, results](const JobControl& control) {
+            for (const QString& path : archivePaths) {
+                if (control.cancelled())
+                    break;
+                results->append({path, archives::extract(path, destination, control)});
+            }
+        },
+        [self, results, destination](bool cancelled) {
+            if (!self)
+                return;
+            self->m_model->reload();
+            if (cancelled) {
+                self->m_toast->showMessage(u"Extracting was stopped."_s);
+                return;
+            }
+            QStringList failures;
+            QString extracted;
+            for (const auto& [archive, result] : *results) {
+                if (result)
+                    extracted = *result;
+                else
+                    failures << u"“%1”: %2"_s.arg(QFileInfo(archive).fileName(), result.error());
+            }
+            if (!failures.isEmpty()) {
+                self->m_toast->showMessage(u"Could not extract %1"_s.arg(failures.join(u"; "_s)), 7000);
+                return;
+            }
+            if (QDir::cleanPath(destination) == QDir::cleanPath(location::localPath(self->m_location)))
+                self->m_selectWhenCreated = QFileInfo(extracted).fileName();
+            self->m_toast->showMessage(u"Extracted to “%1”."_s.arg(extracted));
+        });
 }
 
 void MainWindow::compressSelection()
@@ -1449,26 +1474,32 @@ void MainWindow::compressSelection()
     }
     const QString archive = QDir(directory).filePath(fileops::uniqueName(directory, *chosen));
 
-    m_toast->showMessage(u"Compressing into “%1”…"_s.arg(QFileInfo(archive).fileName()));
-    auto* watcher = new QFutureWatcher<std::expected<void, QString>>(this);
-    connect(watcher, &QFutureWatcherBase::finished, this, [this, watcher, archive, directory] {
-        watcher->deleteLater();
-        const auto result = watcher->result();
-        m_model->reload();
-        if (!result) {
-            m_toast->showMessage(u"Could not compress: %1"_s.arg(result.error()), 7000);
-            return;
-        }
-        m_app.pushUndo(u"Compress"_s, [archive](MainWindow& window) {
-            window.reportUndo(fileops::moveToTrash({archive}).failures,
-                u"“%1” moved to Trash."_s.arg(QFileInfo(archive).fileName()), u"remove"_s);
+    auto result = std::make_shared<std::expected<void, QString>>();
+    QPointer<MainWindow> self(this);
+    m_app.jobs().run(
+        u"Compressing into “%1”"_s.arg(QFileInfo(archive).fileName()),
+        [paths = pathsOf(entries), archive, result](
+            const JobControl& control) { *result = archives::compress(paths, archive, control); },
+        [self, result, archive, directory](bool cancelled) {
+            if (!self)
+                return;
+            self->m_model->reload();
+            if (cancelled) {
+                self->m_toast->showMessage(u"Compressing was stopped."_s);
+                return;
+            }
+            if (!*result) {
+                self->m_toast->showMessage(u"Could not compress: %1"_s.arg(result->error()), 7000);
+                return;
+            }
+            self->m_app.pushUndo(u"Compress"_s, [archive](MainWindow& window) {
+                window.reportUndo(fileops::moveToTrash({archive}).failures,
+                    u"“%1” moved to Trash."_s.arg(QFileInfo(archive).fileName()), u"remove"_s);
+            });
+            if (QDir::cleanPath(directory) == QDir::cleanPath(location::localPath(self->m_location)))
+                self->m_selectWhenCreated = QFileInfo(archive).fileName();
+            self->showUndoableMessage(u"Created “%1”."_s.arg(QFileInfo(archive).fileName()), true);
         });
-        if (QDir::cleanPath(directory) == QDir::cleanPath(location::localPath(m_location)))
-            m_selectWhenCreated = QFileInfo(archive).fileName();
-        showUndoableMessage(u"Created “%1”."_s.arg(QFileInfo(archive).fileName()), true);
-    });
-    watcher->setFuture(
-        QtConcurrent::run([paths = pathsOf(entries), archive] { return archives::compress(paths, archive); }));
 }
 
 void MainWindow::openWith(const std::vector<FileEntry>& entries, const QString& appId)
@@ -1679,7 +1710,10 @@ void MainWindow::startTransfer(TransferKind kind, QList<TransferItem> items, boo
                         QStringList copies;
                         for (const TransferItem& item : completed)
                             copies << item.destination;
-                        window.runFileOperation([copies] { return fileops::moveToTrash(copies).failures; },
+                        window.runFileOperation(
+                            u"Moving the copies to Trash"_s,
+                            [copies](
+                                const JobControl& control) { return fileops::moveToTrash(copies, control).failures; },
                             u"The copies were moved to Trash."_s, u"remove the copy of"_s);
                         return;
                     }

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Progress.hpp"
+
 #include <QDateTime>
 #include <QString>
 #include <QStringList>
@@ -20,8 +22,10 @@ QString baseName(const QString& archivePath);
 
 // Extracts into `directory`. An archive holding one item puts it there directly; one
 // holding several gets a folder of its own, named after the archive, like Nautilus does.
-// Blocking; returns the path of the extracted item or folder.
-std::expected<QString, QString> extract(const QString& archivePath, const QString& directory);
+// Blocking; returns the path of the extracted item or folder. `control` hears of each file,
+// and stopping it takes away what was extracted.
+std::expected<QString, QString> extract(
+    const QString& archivePath, const QString& directory, const JobControl& control = {});
 
 // The kinds of archive compress() can make, by extension: "zip", "tar.xz", …
 QStringList compressFormats();
@@ -45,16 +49,18 @@ std::expected<std::shared_ptr<const std::vector<Entry>>, QString> contents(const
 std::expected<std::vector<Entry>, QString> list(const QString& archivePath, const QString& folder);
 
 // Extracts `paths` (inside the archive, all in one folder of it) into `directory`, each under
-// its own name, folders with everything in them. Blocking.
+// its own name, folders with everything in them. Blocking; `control` hears of each file.
 std::expected<void, QString> extractPaths(
-    const QString& archivePath, const QStringList& paths, const QString& directory);
+    const QString& archivePath, const QStringList& paths, const QString& directory, const JobControl& control = {});
 
 // A new, empty folder for unpacking copies of things in archives, to open or copy them; ones
 // older than a day are cleared away.
 QString stagingFolder();
 
 // Packs `paths` into a new archive at `archivePath`, whose extension picks the format. The
-// items keep their own names inside, wherever they come from. Blocking.
-std::expected<void, QString> compress(const QStringList& paths, const QString& archivePath);
+// items keep their own names inside, wherever they come from. Blocking; `control` hears of
+// each file, and stopping it leaves no archive.
+std::expected<void, QString> compress(
+    const QStringList& paths, const QString& archivePath, const JobControl& control = {});
 
 } // namespace ariadne::archives

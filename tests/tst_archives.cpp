@@ -113,6 +113,33 @@ private slots:
         }
     }
 
+    void tellsHowFarItGot()
+    {
+        const QString folder = m_dir.filePath(u"src/project"_s);
+        const QString archive = m_dir.filePath(u"counted.tar.gz"_s);
+        TransferProgress last;
+        const JobControl control([&](const TransferProgress& progress) { last = progress; }, [] { return false; });
+        QVERIFY(archives::compress({folder}, archive, control).has_value());
+        QVERIFY(last.totalFiles > 1);
+        QCOMPARE(last.doneFiles, last.totalFiles);
+
+        const QString out = m_dir.filePath(u"counted"_s);
+        QDir().mkpath(out);
+        last = {};
+        QVERIFY(archives::extract(archive, out, control).has_value());
+        QVERIFY(last.totalFiles > 1);
+        QCOMPARE(last.doneFiles, last.totalFiles);
+
+        // Stopped, nothing is left of it.
+        const QString stoppedOut = m_dir.filePath(u"stopped"_s);
+        QDir().mkpath(stoppedOut);
+        const auto stopped = archives::extract(archive, stoppedOut, JobControl({}, [] { return true; }));
+        QVERIFY(!stopped.has_value());
+        QVERIFY(QDir(stoppedOut).isEmpty());
+        QVERIFY(!archives::compress({folder}, m_dir.filePath(u"never.zip"_s), JobControl({}, [] { return true; })));
+        QVERIFY(!QFileInfo::exists(m_dir.filePath(u"never.zip"_s)));
+    }
+
     void brokenArchivesFail()
     {
         const QString archive = m_dir.filePath(u"broken.zip"_s);

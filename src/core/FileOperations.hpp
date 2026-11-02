@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Progress.hpp"
+
 #include <QFile>
 #include <QList>
 #include <QString>
@@ -26,15 +28,17 @@ struct TrashResult {
 
 // Moves files to the trash, following the freedesktop.org trash spec: the home trash for
 // files on the home file system, the drive's own trash folder for files on other drives.
-// Blocking.
-TrashResult moveToTrash(const QStringList& paths);
+// Blocking; tells `control` of each item, and stops when it says so.
+TrashResult moveToTrash(const QStringList& paths, const JobControl& control = {});
 
 // Puts trashed items back where they were, from any trash folder; for undoing moveToTrash().
 QList<Failure> restoreTrashed(const QList<Trashed>& items);
 
 // Deletes files and whole folders for good. Deleting an item from the top of the home
 // trash also removes its restore information. Blocking; returns what could not be deleted.
-QList<Failure> deletePermanently(const QStringList& paths);
+// Everything inside is counted first, so `control` hears of each file as it goes; once it says
+// to stop, what is left stays.
+QList<Failure> deletePermanently(const QStringList& paths, const JobControl& control = {});
 
 // Where an item at the top of the home trash came from; empty when unknown.
 QString originalPath(const QString& trashedPath);
@@ -43,7 +47,7 @@ QString originalPath(const QString& trashedPath);
 QList<Failure> restoreFromTrash(const QStringList& paths);
 
 // Deletes everything in the home trash.
-QList<Failure> emptyTrash();
+QList<Failure> emptyTrash(const JobControl& control = {});
 
 // `name`, or the first of "name (2)", "name (3)", … (before the extension) not taken in
 // `directory`.

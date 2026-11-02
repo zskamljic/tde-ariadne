@@ -76,6 +76,28 @@ private slots:
         QVERIFY(!QFileInfo::exists(tree));
     }
 
+    void deletingTellsOfEveryItemAndStops()
+    {
+        makeFile(u"many/a/b/c.txt"_s);
+        makeFile(u"many/d.txt"_s);
+        makeFile(u"one.txt"_s);
+        const QString many = m_dir.filePath(u"many"_s);
+        const QString one = m_dir.filePath(u"one.txt"_s);
+        QList<TransferProgress> heard;
+        const JobControl control([&](const TransferProgress& progress) { heard << progress; }, [] { return false; });
+        QVERIFY(fileops::deletePermanently({many, one}, control).isEmpty());
+        // many, a, b, c.txt and d.txt, and one.txt: six, the last one done.
+        QCOMPARE(heard.last().totalFiles, 6);
+        QCOMPARE(heard.last().doneFiles, 6);
+
+        makeFile(u"kept/x.txt"_s);
+        const QString kept = m_dir.filePath(u"kept"_s);
+        const JobControl stopped({}, [] { return true; });
+        QVERIFY(fileops::deletePermanently({kept}, stopped).isEmpty());
+        QVERIFY(QFileInfo::exists(kept + u"/x.txt"_s));
+        QDir(kept).removeRecursively();
+    }
+
     void deletingASymlinkKeepsItsTarget()
     {
         const QString target = makeFile(u"target/kept.txt"_s);

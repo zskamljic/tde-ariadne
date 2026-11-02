@@ -99,10 +99,11 @@ private:
     void trashSelection();
     // Asks first, since deleted files are gone for good.
     void deleteSelection();
-    // Runs `job` on a worker thread, then refreshes and reports how it went.
-    // `recordUndo` runs afterwards, on this thread; it returns whether it added an undo step.
-    void runFileOperation(std::function<QList<fileops::Failure>()> job, const QString& doneMessage, const QString& verb,
-        std::function<bool()> recordUndo = {});
+    // Runs `job` as a job with its progress, called `description` while it runs, then refreshes
+    // and reports how it went. `recordUndo` runs afterwards, on this thread; it returns whether
+    // it added an undo step.
+    void runFileOperation(const QString& description, std::function<QList<fileops::Failure>(const JobControl&)> job,
+        const QString& doneMessage, const QString& verb, std::function<bool()> recordUndo = {});
     void trashPaths(const QStringList& paths);
     // Copies or moves files, in the background with progress.
     void startTransfer(TransferKind kind, QList<TransferItem> items, bool undoable = true);

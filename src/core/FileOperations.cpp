@@ -27,13 +27,19 @@ bool isTopOfTrash(const QString& path)
 
 } // namespace
 
-TrashResult moveToTrash(const QStringList& paths)
+TrashResult moveToTrash(const QStringList& paths, const JobControl& control)
 {
     // Qt cannot create the home trash when the data folder itself is missing.
     QDir().mkpath(QStandardPaths::writableLocation(QStandardPaths::GenericDataLocation));
 
     TrashResult result;
+    TransferProgress progress {.totalFiles = int(paths.size())};
     for (const QString& path : paths) {
+        if (control.cancelled())
+            break;
+        progress.current = QFileInfo(path).fileName();
+        control.report(progress);
+        ++progress.doneFiles;
         QFile file(path);
         if (file.moveToTrash())
             result.trashed << Trashed {QDir::cleanPath(QFileInfo(path).absoluteFilePath()), file.fileName()};
@@ -64,25 +70,78 @@ QList<Failure> restoreTrashed(const QList<Trashed>& items)
     return failures;
 }
 
-QList<Failure> deletePermanently(const QStringList& paths)
+namespace {
+
+// Everything in `path` and `path` itself, folders not followed through links.
+int countTree(const QString& path, const JobControl& control)
+{
+    int count = 1;
+    if (const QFileInfo info(path); !info.isDir() || info.isSymLink())
+        return count;
+    for (const auto& entry : QDirListing(path,
+             QDirListing::IteratorFlag::Recursive | QDirListing::IteratorFlag::IncludeHidden
+                 | QDirListing::IteratorFlag::IncludeBrokenSymlinks)) {
+        Q_UNUSED(entry);
+        if (++count % 1000 == 0 && control.cancelled())
+            break;
+    }
+    return count;
+}
+
+// Deletes `path` and all that is in it, the contents first, telling of each item.
+bool removeTree(const QString& path, TransferProgress& progress, const JobControl& control)
+{
+    if (control.cancelled())
+        return false;
+    const QFileInfo info(path);
+    bool removed = true;
+    if (info.isDir() && !info.isSymLink()) {
+        const QDir folder(path);
+        for (const QString& name :
+            folder.entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot)) {
+            if (!removeTree(folder.filePath(name), progress, control))
+                removed = false;
+        }
+        removed = removed && QDir().rmdir(path);
+    } else {
+        removed = QFile::remove(path);
+    }
+    progress.current = info.fileName();
+    ++progress.doneFiles;
+    control.report(progress);
+    return removed;
+}
+
+} // namespace
+
+QList<Failure> deletePermanently(const QStringList& paths, const JobControl& control)
 {
     const QString trashFiles = QDir::cleanPath(location::trashFilesPath());
+    TransferProgress progress;
+    for (const QString& path : paths)
+        progress.totalFiles += countTree(path, control);
+    control.report(progress);
+
     QList<Failure> failures;
     for (const QString& path : paths) {
+        if (control.cancelled())
+            break;
         const QFileInfo info(path);
-        bool removed = false;
-        QString reason;
-        if (info.isDir() && !info.isSymLink()) {
-            removed = QDir(path).removeRecursively();
-            if (!removed)
-                reason = u"Some of its contents could not be deleted."_s;
-        } else {
+        if (!info.isDir() || info.isSymLink()) {
+            // A file says why it could not go.
             QFile file(path);
-            removed = file.remove();
-            reason = file.errorString();
-        }
-        if (!removed) {
-            failures << Failure {path, reason};
+            const bool removed = file.remove();
+            progress.current = info.fileName();
+            ++progress.doneFiles;
+            control.report(progress);
+            if (!removed) {
+                failures << Failure {path, file.errorString()};
+                continue;
+            }
+        } else if (!removeTree(path, progress, control)) {
+            if (control.cancelled())
+                break;
+            failures << Failure {path, u"Some of its contents could not be deleted."_s};
             continue;
         }
 
@@ -138,13 +197,13 @@ QList<Failure> restoreFromTrash(const QStringList& paths)
     return failures;
 }
 
-QList<Failure> emptyTrash()
+QList<Failure> emptyTrash(const JobControl& control)
 {
     QStringList paths;
     const QDir files(location::trashFilesPath());
     for (const QString& name : files.entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot))
         paths << files.filePath(name);
-    QList<Failure> failures = deletePermanently(paths);
+    QList<Failure> failures = deletePermanently(paths, control);
 
     // Restore information for items that are gone, and the size cache, go too.
     const QString trash = QFileInfo(location::trashFilesPath()).absolutePath();

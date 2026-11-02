@@ -1,6 +1,7 @@
 #pragma once
 
 #include "FileOperations.hpp"
+#include "Progress.hpp"
 
 #include <QElapsedTimer>
 #include <QList>
@@ -35,14 +36,6 @@ enum class ConflictChoice { Replace, Merge, Skip, KeepBoth, Cancel };
 struct ConflictAnswer {
     ConflictChoice choice = ConflictChoice::Skip;
     bool applyToAll = false; // answer every later conflict of the same kind the same way
-};
-
-struct TransferProgress {
-    qint64 doneBytes = 0;
-    qint64 totalBytes = 0;
-    int doneFiles = 0;
-    int totalFiles = 0;
-    QString current; // name of the file being worked on
 };
 
 struct TransferResult {
