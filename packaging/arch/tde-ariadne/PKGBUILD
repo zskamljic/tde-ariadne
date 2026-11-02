@@ -1,7 +1,7 @@
 # Maintainer: Zan Skamljic <zan.skamljic@gmail.com>
 
 pkgname=tde-ariadne
-pkgver=0.3.2
+pkgver=0.3.3
 pkgrel=1
 pkgdesc='A Nautilus-style file manager built with Qt 6'
 arch=(x86_64 aarch64)
@@ -39,7 +39,7 @@ optdepends=(
 )
 install=ariadne.install
 source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
-sha256sums=('35b7275448ac0680f80e7a80afb457514c0751b89e215235cee80e5b9212e0aa')
+sha256sums=('SKIP')
 
 build() {
   cmake -B build -S "$pkgname-$pkgver" -G Ninja \
