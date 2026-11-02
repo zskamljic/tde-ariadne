@@ -30,6 +30,7 @@ signals:
     void mountRequested(const QString& deviceId, bool newWindow);
     void unmountRequested(const QString& deviceId);
     void ejectRequested(const QString& deviceId);
+    void formatRequested(const QString& deviceId);
     void emptyTrashRequested();
     void filesDropped(const QStringList& paths, const QString& directory, Qt::DropAction action);
     void trashDropped(const QStringList& paths);

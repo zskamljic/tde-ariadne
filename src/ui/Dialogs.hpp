@@ -28,4 +28,12 @@ std::optional<QString> askArchiveName(QWidget* parent, const QString& suggestedN
 // Asks what to do about an item that is already where a copy or move would put another.
 ConflictAnswer askConflict(QWidget* parent, const Conflict& conflict);
 
+// What to format a drive with: a file system of `types` (UDisks2's names) and a name for it.
+struct FormatChoice {
+    QString type;
+    QString label;
+};
+// Asks how to format the drive called `name`, warning that what is on it goes.
+std::optional<FormatChoice> askFormat(QWidget* parent, const QString& name, const QStringList& types);
+
 } // namespace ariadne::dialogs

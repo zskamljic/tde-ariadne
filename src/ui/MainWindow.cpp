@@ -339,6 +339,7 @@ QWidget* MainWindow::createSidebarColumn()
     connect(m_sidebar, &Sidebar::mountRequested, this, &MainWindow::mountDevice);
     connect(m_sidebar, &Sidebar::unmountRequested, this, [this](const QString& id) { unmountDevice(id, false); });
     connect(m_sidebar, &Sidebar::ejectRequested, this, [this](const QString& id) { unmountDevice(id, true); });
+    connect(m_sidebar, &Sidebar::formatRequested, this, &MainWindow::formatDevice);
     connect(&m_app.devices(), &DeviceMonitor::changed, this, &MainWindow::leaveRemovedDrive);
     connect(m_sidebar, &Sidebar::emptyTrashRequested, this, &MainWindow::emptyTrash);
     connect(m_sidebar, &Sidebar::filesDropped, this, &MainWindow::drop);
@@ -1980,6 +1981,32 @@ void MainWindow::unmountDevice(const QString& id, bool eject)
             self->m_toast->showMessage(u"“%1” can be safely removed."_s.arg(label));
     };
     eject ? m_app.devices().eject(id, std::move(done)) : m_app.devices().unmount(id, std::move(done));
+}
+
+void MainWindow::formatDevice(const QString& id)
+{
+    const std::optional<Device> device = m_app.devices().find(id);
+    if (!device)
+        return;
+    const QStringList types = m_app.devices().formattableTypes();
+    const auto choice = dialogs::askFormat(this, device->label, types);
+    if (!choice)
+        return;
+    // Nothing of it stays shown while it goes.
+    if (!device->mountPoint.isEmpty()) {
+        const QUrl mount = location::fromLocalPath(device->mountPoint);
+        if (m_location == mount || location::isAncestorOf(mount, m_location))
+            navigate(location::home());
+    }
+    m_toast->showMessage(u"Formatting “%1”…"_s.arg(device->label));
+    m_app.devices().format(id, choice->type, choice->label,
+        [self = QPointer(this), label = choice->label](std::expected<void, QString> result) {
+            if (!self)
+                return;
+            self->m_toast->showMessage(result ? u"“%1” is formatted."_s.arg(label.isEmpty() ? u"The drive"_s : label)
+                                              : u"Could not format: %1"_s.arg(result.error()),
+                result ? 4000 : 7000);
+        });
 }
 
 QString MainWindow::mountOfLocation() const

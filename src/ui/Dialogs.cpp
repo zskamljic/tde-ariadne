@@ -244,4 +244,64 @@ std::optional<QString> askArchiveName(QWidget* parent, const QString& suggestedN
     return name->text().trimmed() + u'.' + format->currentData().toString();
 }
 
+std::optional<FormatChoice> askFormat(QWidget* parent, const QString& name, const QStringList& types)
+{
+    // What each is good for, and how long a name it takes.
+    struct Kind {
+        QString type;
+        QString title;
+        int maxLabel;
+    };
+    const Kind kinds[] = {
+        {u"exfat"_s, u"exFAT — for any computer, with large files"_s, 15},
+        {u"vfat"_s, u"FAT — for any computer and older devices, files up to 4 GB"_s, 11},
+        {u"ntfs"_s, u"NTFS — for Windows"_s, 32},
+        {u"ext4"_s, u"ext4 — for Linux only"_s, 16},
+        {u"btrfs"_s, u"Btrfs — for Linux only"_s, 255},
+    };
+
+    tde::Dialog dialog(u"Format"_s, parent);
+    auto* warning = new QLabel(u"Everything on “%1” will be erased."_s.arg(name));
+    warning->setObjectName(u"ConfirmMessage"_s);
+    warning->setWordWrap(true);
+    auto* type = new QComboBox;
+    for (const Kind& kind : kinds) {
+        if (types.contains(kind.type))
+            type->addItem(kind.title, kind.type);
+    }
+    auto* label = new QLineEdit(name);
+    label->setPlaceholderText(u"Name"_s);
+    label->setMinimumWidth(320);
+    const auto limit = [&] {
+        for (const Kind& kind : kinds) {
+            if (kind.type == type->currentData().toString())
+                label->setMaxLength(kind.maxLabel);
+        }
+    };
+    QObject::connect(type, &QComboBox::currentIndexChanged, &dialog, limit);
+    limit();
+
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Cancel);
+    QPushButton* format = buttons->addButton(u"Format"_s, QDialogButtonBox::AcceptRole);
+    format->setObjectName(u"DestructiveButton"_s);
+    format->setEnabled(type->count() > 0);
+    QObject::connect(buttons, &QDialogButtonBox::accepted, &dialog, &QDialog::accept);
+    QObject::connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
+
+    dialog.contentLayout()->addWidget(warning);
+    dialog.contentLayout()->addWidget(new QLabel(u"Name"_s));
+    dialog.contentLayout()->addWidget(label);
+    dialog.contentLayout()->addWidget(new QLabel(u"File system"_s));
+    dialog.contentLayout()->addWidget(type);
+    if (type->count() == 0)
+        dialog.contentLayout()->addWidget(new QLabel(u"No tools for making file systems were found."_s));
+    dialog.contentLayout()->addWidget(buttons);
+    // Cancel has the focus, as an erased drive cannot be brought back.
+    dialog.setDefaultButton(buttons->button(QDialogButtonBox::Cancel));
+    buttons->button(QDialogButtonBox::Cancel)->setFocus();
+    if (dialog.run() != QDialog::Accepted)
+        return std::nullopt;
+    return FormatChoice {type->currentData().toString(), label->text().trimmed()};
+}
+
 } // namespace ariadne::dialogs

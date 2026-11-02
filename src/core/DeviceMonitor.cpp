@@ -441,6 +441,61 @@ void DeviceMonitor::unmount(const QString& id, ActionCallback done)
         });
 }
 
+QStringList DeviceMonitor::formattableTypes() const
+{
+    QStringList types;
+    for (const QString& type : {u"ext4"_s, u"exfat"_s, u"vfat"_s, u"ntfs"_s, u"btrfs"_s}) {
+        auto message = QDBusMessage::createMethodCall(
+            Service, ManagerPath + u"/Manager"_s, u"org.freedesktop.UDisks2.Manager"_s, u"CanFormat"_s);
+        message.setArguments({type});
+        const QDBusMessage reply = m_bus.call(message, QDBus::Block, 2000);
+        // (available, the program that is missing)
+        if (reply.type() == QDBusMessage::ReplyMessage && !reply.arguments().isEmpty()) {
+            const QDBusArgument answer = reply.arguments().first().value<QDBusArgument>();
+            bool available = false;
+            QString missing;
+            answer.beginStructure();
+            answer >> available >> missing;
+            answer.endStructure();
+            if (available)
+                types << type;
+        }
+    }
+    return types;
+}
+
+bool DeviceMonitor::canFormat(const QString& id) const
+{
+    const std::optional<Device> device = find(id);
+    return device && device->uri.isEmpty() && id.startsWith(ManagerPath + u'/');
+}
+
+void DeviceMonitor::format(const QString& id, const QString& type, const QString& label, ActionCallback done)
+{
+    const std::optional<Device> device = find(id);
+    if (!device || !canFormat(id)) {
+        done(std::unexpected(u"The device is no longer available."_s));
+        return;
+    }
+    // An unlocked encrypted device is formatted whole, not only what it holds.
+    const QString target = device->backingId.isEmpty() ? id : device->backingId;
+    const QVariantMap options {
+        {u"label"_s, label},
+        // Unmounted and locked first, and the partition marked for what it now holds.
+        {u"tear-down"_s, true},
+        {u"update-partition-type"_s, true},
+        // Linux file systems belong to the user rather than to root.
+        {u"take-ownership"_s, type == u"ext4" || type == u"btrfs"},
+    };
+    call(target, BlockInterface, u"Format"_s, {type, options}, [this, done](const QDBusMessage& reply) {
+        scheduleRefresh();
+        if (reply.type() == QDBusMessage::ErrorMessage)
+            done(std::unexpected(errorText(reply)));
+        else
+            done({});
+    });
+}
+
 void DeviceMonitor::eject(const QString& id, ActionCallback done)
 {
     const std::optional<Device> device = find(id);

@@ -97,6 +97,10 @@ the button in the header bar shows how far each has got and how long it has left
 A stopped extraction or compression leaves nothing behind; stopped deleting leaves what it did
 not reach.
 
+A drive's menu in the sidebar formats it: erased, with a new name and a new file system, exFAT,
+FAT, NTFS, ext4 or Btrfs, as far as their tools are installed (exfatprogs, dosfstools, ntfs-3g,
+btrfs-progs; ext4's come with the system). The running system's own drives are never listed.
+
 The sidebar shows how full each drive is; Properties shows a folder's free space, and changes
 permissions for one item or several, or for everything inside a folder.
 

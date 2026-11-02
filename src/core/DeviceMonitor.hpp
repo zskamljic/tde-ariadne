@@ -68,6 +68,14 @@ public:
     void unmount(const QString& id, ActionCallback done);
     // Unmounts, then ejects or powers off the drive so it can be removed safely.
     void eject(const QString& id, ActionCallback done);
+    // The file systems a drive can be formatted with here, by UDisks2's names ("ext4", "exfat",
+    // "vfat", "ntfs", "btrfs"), those whose tools are missing left out. Blocking, briefly.
+    QStringList formattableTypes() const;
+    // Whether the device is a drive's, which format() can format.
+    bool canFormat(const QString& id) const;
+    // Erases the device and makes an empty file system of `type` on it, named `label`; an
+    // encrypted one loses its encryption. Unmounts it first; polkit may ask for a password.
+    void format(const QString& id, const QString& type, const QString& label, ActionCallback done);
     // Mounts a network location given by its address, such as smb://server/share.
     void connectTo(const QString& uri, gvfs::MountOperation::Answer answer, MountCallback done);
 

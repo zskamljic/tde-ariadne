@@ -427,6 +427,11 @@ void Sidebar::contextMenuEvent(QContextMenuEvent* event)
             menu.addAction(u"Eject"_s, this, [this, deviceId] { emit ejectRequested(deviceId); });
     }
 
+    if (!deviceId.isEmpty() && m_devices.canFormat(deviceId)) {
+        menu.addSeparator();
+        menu.addAction(u"Format…"_s, this, [this, deviceId] { emit formatRequested(deviceId); });
+    }
+
     menu.exec(event->globalPos());
 }
 
