@@ -165,6 +165,10 @@ private:
     void makeDefault();
     void showMounted(const std::expected<QString, QString>& result, bool newWindow);
     void unmountDevice(const QString& id, bool eject);
+    // The mount point of the drive the folder shown is on, if it is on one.
+    QString mountOfLocation() const;
+    // Leaves the folder shown for the one above its drive, once the drive was pulled out.
+    void leaveRemovedDrive();
 
     Application& m_app;
     DirectoryModel* m_model;
@@ -221,6 +225,7 @@ private:
     QList<QUrl> m_forwardStack;
     QString m_selectAfterLoad;
     QString m_loadError;
+    QString m_locationMount; // see mountOfLocation()
     QString m_selectWhenCreated;
     bool m_handleWatched = false;
 };

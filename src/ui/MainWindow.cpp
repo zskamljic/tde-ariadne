@@ -60,8 +60,10 @@
 #include <QtConcurrentRun>
 #include <QtMath>
 
+#include <algorithm>
 #include <cstdio>
 #include <print>
+#include <utility>
 
 using namespace Qt::StringLiterals;
 
@@ -337,6 +339,7 @@ QWidget* MainWindow::createSidebarColumn()
     connect(m_sidebar, &Sidebar::mountRequested, this, &MainWindow::mountDevice);
     connect(m_sidebar, &Sidebar::unmountRequested, this, [this](const QString& id) { unmountDevice(id, false); });
     connect(m_sidebar, &Sidebar::ejectRequested, this, [this](const QString& id) { unmountDevice(id, true); });
+    connect(&m_app.devices(), &DeviceMonitor::changed, this, &MainWindow::leaveRemovedDrive);
     connect(m_sidebar, &Sidebar::emptyTrashRequested, this, &MainWindow::emptyTrash);
     connect(m_sidebar, &Sidebar::filesDropped, this, &MainWindow::drop);
     connect(m_sidebar, &Sidebar::trashDropped, this, &MainWindow::trashPaths);
@@ -565,6 +568,8 @@ void MainWindow::setLocation(const QUrl& url)
             child = *parent;
         m_selectAfterLoad = QFileInfo(location::localPath(child)).fileName();
     }
+
+    m_locationMount = mountOfLocation();
 
     m_view->setPlaceholder({}, {});
     applyFolderView(m_app.folderView(url));
@@ -1941,6 +1946,35 @@ void MainWindow::unmountDevice(const QString& id, bool eject)
             self->m_toast->showMessage(u"“%1” can be safely removed."_s.arg(label));
     };
     eject ? m_app.devices().eject(id, std::move(done)) : m_app.devices().unmount(id, std::move(done));
+}
+
+QString MainWindow::mountOfLocation() const
+{
+    if (!m_location.isLocalFile())
+        return {};
+    // The deepest, for a drive mounted inside another.
+    QString deepest;
+    for (const Device& device : m_app.devices().devices()) {
+        if (device.mountPoint.length() <= deepest.length())
+            continue;
+        const QUrl mount = location::fromLocalPath(device.mountPoint);
+        if (m_location == mount || location::isAncestorOf(mount, m_location))
+            deepest = device.mountPoint;
+    }
+    return deepest;
+}
+
+void MainWindow::leaveRemovedDrive()
+{
+    const QString previous = std::exchange(m_locationMount, mountOfLocation());
+    if (previous.isEmpty())
+        return;
+    const bool stillMounted = std::ranges::any_of(
+        m_app.devices().devices(), [&](const Device& device) { return device.mountPoint == previous; });
+    if (stillMounted)
+        return;
+    if (const auto above = location::parent(location::fromLocalPath(previous)))
+        navigate(*above);
 }
 
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
