@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.28)
 
 project(ariadne
-    VERSION 0.3.3
+    VERSION 0.3.4
     DESCRIPTION "A file manager"
     LANGUAGES C CXX)
 
@@ -22,7 +22,7 @@ if(NOT WAYLAND_SCANNER)
     message(FATAL_ERROR "wayland-scanner was not found")
 endif()
 # libtde as installed; for working on both, a checkout next to this one is used instead.
-find_package(Tde 0.3 QUIET)
+find_package(Tde 0.4 QUIET)
 if(NOT Tde_FOUND)
     if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/../libtde/CMakeLists.txt)
         message(STATUS "Using libtde from ${CMAKE_CURRENT_SOURCE_DIR}/../libtde")
